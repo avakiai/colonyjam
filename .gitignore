@@ -3,6 +3,3 @@
 .Rdata
 .httr-oauth
 .DS_Store
-R/1-data/input/.gitignore
-R/1-data/output/.gitignore
-R/3-results/models/.gitignore
