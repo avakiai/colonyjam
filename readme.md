@@ -1,3 +1,5 @@
+[![DOI](https://zenodo.org/badge/605545345.svg)](https://zenodo.org/badge/latestdoi/605545345)
+
 # ColonyJam!
 
 This R project implements the analyses for the paper "Flexible control of vocal timing in bats" by Ava Kiai, Jan Clemens, Manfred Koessl, David Poeppel, and Julio Hechavarria. 
