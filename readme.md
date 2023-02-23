@@ -1,4 +1,4 @@
-[![DOI](https://zenodo.org/badge/605545345.svg)](https://zenodo.org/badge/latestdoi/605545345)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.7670888.svg)](https://doi.org/10.5281/zenodo.7670888)
 
 # ColonyJam!
 
