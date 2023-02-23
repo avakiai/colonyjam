@@ -9,7 +9,7 @@ fontsize: 11pt
 params:
   data_path: './../1-data' 
   results_path: './../3-results'
-  exp: "exp_2"
+  exp: "exp_1"
   plot_sm: TRUE
   use_all: TRUE
   subsample: FALSE
@@ -125,7 +125,7 @@ data <- data %>%
                              labels = paste0(as.character(sort(unique(data$modulation))),"Hz")))
 
 # data from the first few minutes of exposure
-dat <- filter_firstexposure(data_2proc)
+data_init <- filter_firstexposure(data_2proc)
 
 str(data)
 
@@ -1278,42 +1278,6 @@ confmat_sh <- p.mat(confmats_sh, ulim = max(confmats_sh$n)) +
 
 ```
 
-```{r auc, include=FALSE}
-# Validation set assessment #2: ROC curves and AUC
-
-# Needs to import ROCR package for ROC curve plotting:
-library(ROCR)
-
-# Calculate the probability of new observations belonging to each class
-# prediction_for_roc_curve will be a matrix with dimensions data_set_size x number_of_classes
-prediction_for_roc_curve <- predict(shPeak_rf_classifier,mu_bs_valid[,-3],type="prob")
-
-# Use pretty colours:
-pretty_colours <- RColorBrewer::brewer.pal(n=8,name="Spectral")
-# Specify the different classes 
-classes <- levels(mu_bs_valid$modulation)
-# For each class
-for (i in 1:length(levels(mu_bs_valid$modulation))) {
- # Define which observations belong to class[i]
- true_values <- ifelse(mu_bs_valid[,3]==classes[i],1,0)
- # Assess the performance of classifier for class[i]
- pred <- prediction(prediction_for_roc_curve[,i],true_values)
- perf <- performance(pred, "tpr", "fpr")
- if (i==1)
- {
-     plot(perf,main="ROC Curve",col=pretty_colours[i]) 
- }
- else
- {
-     plot(perf,main="ROC Curve",col=pretty_colours[i],add=TRUE) 
- }
- # Calculate the AUC and print it to screen
- auc.perf <- performance(pred, measure = "auc")
- print(auc.perf@y.values)
-}
-```
-
-
 #### Quantify overlapping calls
 
 ```{r call-overlap}
@@ -1444,8 +1408,7 @@ po <- p.circ_density(dat=overlap_calls, circ_dat=overlap_circsummary %>% confint
 
 ### Investigate the onset of this adaptation ability
 To determine how many cycles of continuous stimulation are needed for the bats's
-timing adaptation to stabilize, estimate mean and concentration parameters for successively
-larger cycle windows:
+timing adaptation to stabilize, estimate mean and concentration parameters for successively larger cycle windows:
 
 ```{r calc-speed}
 max_n <- data_init %>% group_by(modulation, condition) %>% summarise(n = max(start_cycle)) %>% 
@@ -1463,46 +1426,6 @@ for (c in seq(0, max_n$min, 10)) {
            theta_bar = mean.circular(start_phase_circ, na.rm = T) %>% as.numeric(),
            r_bar = rho.circular(start_phase_circ, na.rm = T))
   by_cycle_summary <- rbind(by_cycle_summary, dat_summary)
-}
-```
-
-
-```{r 3d-plots-render, eval=FALSE, include=FALSE}
-# Show interactive plots for angular means over each cumulative 5-cycles:
-pltypal <- RColorBrewer::brewer.pal(n=8,name="Spectral")
-  if (exp == "exp_1") {
-  pltypal <- c("#F46D43","#FFA054")
-  }
-pltypal <- setNames(pltypal, unique(by_cycle_summary$modulation))
-
-plts <- list()
-for (cond in unique(by_cycle_summary$condition)) {
-  pltdat <- by_cycle_summary[by_cycle_summary$condition==cond,] %>%
-      mutate(text = paste0("cycles cum.: ", n, "\n", 
-                           "mu: ", theta_bar, "\n",
-                           "kappa: ", r_bar))
-
-  
-  
-  plt <- plot_ly(data =pltdat,
-                x= ~n, y=~theta_bar, z=~r_bar, 
-                type="scatter3d", mode="markers", 
-                color=~modulation,
-                colors=pltypal,
-                size = 2) %>%
-        layout(title = cond,
-               scene = list(xaxis = list(title = 'elapsed cycles', autorange = "reversed"),
-               yaxis = list(title = 'mu', tickvals = seq(0, 2*pi, length.out = 5),
-                            ticktext = c("0","pi/2","pi","3pi/2","2pi")),
-               zaxis = list(title = 'kappa')))
-  
-  plts <- append(plts,list(plt))
-  
-  print(plt)
-  htmlwidgets::saveWidget(plt, file=file.path(figures_path,paste0(exp, '_cycle_traj_',cond,'_1600.html')))
-  # this saves a widget as an html
-  #rmarkdown::pandoc_convert("C:/Users/Ava Kiai/OneDrive - Johann Wolfgang Goethe Universität/#Bat Lab/_Projects/colony_jam/Experiment_2/4-figures_tables/figures/exp_2_cycle_traj_random masker.html", output = 'C:/Users/Ava Kiai/OneDrive - Johann Wolfgang Goethe Universität/#Bat Lab/_Projects/colony_jam/Experiment_2/4-figures_tables/figures/output.pdf')
-#pdflatex: major issue: So far, you have not checked for MiKTeX updates.
 }
 ```
 
@@ -1534,18 +1457,3 @@ animate(anim, end_pause = 15)
 
 
 ```
-
-
-
-
-
-
-### References
-Some references for circular stats can be found from the 
-[NCSS website](https://ncss-wpengine.netdna-ssl.com/wp-content/themes/ncss/pdf/Procedures/NCSS/Circular_Data_Analysis.pdf), as well as the documentation for the [Matlab](https://www.jstatsoft.org/article/view/v031i10) library for 
-circular stats, and articles written on [Bayesian modelling of circular data](https://journals.sagepub.com/doi/pdf/10.1177/1471082X10000301). 
-
-There is also the textbook, [*Statistical analysis of circular data*](https://books.google.de/books?id=wGPj3EoFdJwC&printsec=frontcover#v=onepage&q&f=false), as well as:
-- Batschelet, E. (1981). *Circular Statistics in Biology.* Academic Press: London.
-- Jammalamadaka, S.R. & Sengupta, A. (2001). *Topics in Circular Statistics.* World Scientific, River Edge, N.J.
-
