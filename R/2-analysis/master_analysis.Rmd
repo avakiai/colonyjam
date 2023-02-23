@@ -20,7 +20,7 @@ In this experiment, we played amplitude modulated white noise to a group of bats
 
 We hypothesized that bats would adapt the timing of their calls to avoid temporal overlap with the amplitude modulated noise.
 
-After extracting call timins from acoustic recordings (.wav files) and identifying the instantaneous period (or phase) in the real or simulated (as in the silent condition) amplitude modulation cycle, we analyzed the call onset data, primarily with circular statistics. 
+After extracting call timings from acoustic recordings (.wav files) and identifying the instantaneous period (or phase) in the real or simulated (as in the silent condition) amplitude modulation cycle, we analyzed the call onset data, primarily with circular statistics. 
 
 ### Setup
 
@@ -100,31 +100,18 @@ if (exp=="exp_2") {c_pal <- c("#0F6273", "#D66502", "#E0685D")
                    w3 <- 6
                    h <- 6
                    h2 <- 12}
-
-recolor <- function(x, which = NULL) {
-  if (exp == "exp_1") {
-    if (is.null(which)) {
-      y <- x + 
-        scale_fill_manual(values = pal) +
-        scale_color_manual(values = pal)
-    } else if (which=="c") {
-      y <- x + 
-        scale_color_manual(values = pal)
-    } else if (which=="f") {
-      y <- x + 
-        scale_fill_manual(values = pal) }
-  } else {
-    y <- x
-  }
-  return(y)
-}
 ```
 
 #### Load data
 ```{r load-data}
 # load data
 data <- readr::read_rds(file.path(data_path,'input',paste0(exp, "_data.RDS"))) %>%
-  mutate(start_phase_circ = circular(start_phase, units="radians", zero = 0, modulo = "2pi", rotation = "counter"),.after ="start_phase") 
+  mutate(start_phase_circ = circular(start_phase, 
+                                     units="radians", 
+                                     zero = 0, 
+                                     modulo = "2pi", 
+                                     rotation = "counter"),
+         .after ="start_phase") 
 
 # data for averaging histograms (modulation variable is numeric-ish)
 data_2proc <- data %>%
@@ -136,6 +123,10 @@ data <- data %>%
   mutate(modulation = factor(modulation, 
                              levels = sort(unique(data$modulation)), 
                              labels = paste0(as.character(sort(unique(data$modulation))),"Hz")))
+
+# data from the first few minutes of exposure
+dat <- filter_firstexposure(data_2proc)
+
 str(data)
 
 # save interim data manips to 1-data/output
@@ -144,41 +135,6 @@ data_path <- file.path(data_path,'output')
 
 ```
 
-```{r early-data, include=FALSE}
-# pull out data from only the first ~7.5-8 minutes of each condition from only the first recording day
-if (exp=="exp_1") {
-  dat1 <- data_2proc %>% 
-    dplyr::filter(session == 1, as.numeric(file_no)==1) 
-  # 8 Hz groups 1-2 were recorded in 1-minute intervals and numberings did not reset 
-  # with recording block; this is quite ugly/hacky but works for the moment
-  dat2 <- rbind(data_2proc %>%
-    dplyr::filter(modulation == 8, session == 1, group == 1, 
-                  condition == "full-band masker",
-                  as.numeric(file_no) %in% seq(66,73)),
-      data_2proc %>%
-    dplyr::filter(modulation == 8, session == 1, group == 1, 
-                condition == "half-band masker",
-                as.numeric(file_no) %in% seq(127,134)),
-      data_2proc %>%
-    dplyr::filter(modulation == 8, session == 1, group == 2, 
-                condition == "full-band masker",
-                as.numeric(file_no) %in% seq(63,70)),
-      data_2proc %>%
-    dplyr::filter(modulation == 8, session == 1, group == 2, 
-                condition == "half-band masker",
-                as.numeric(file_no) %in% seq(124,131)))
-  data_init <- rbind(dat1,dat2)
-} else if (exp=="exp_2") {
-  dat1 <- data_2proc %>% 
-    dplyr::filter(session == 1, 
-                  condition=="steady-state masker" |  condition=="silence") 
-  dat2 <- data_2proc %>% 
-    dplyr::filter(session == 1, condition=="random masker", as.numeric(file_no)==1, minute <=8)
-  data_init <- rbind(dat1, dat2)
-}  
-
-#str(dat)
-```
 
 ### Summary Stats
 
@@ -369,12 +325,12 @@ if (subsample) {
   print(paste0("Sub-sampled data: N = ", nrow(data_samp), ". Original data: N = ", nrow(data), ". N in each group = ", min(check_n$n)))
   
   # if circ data exists, prepare for loading
-  f_circsum <- file.path(data_path,paste0(exp, "_circ_data_seed",seed,".RDS"))
+  f_circsum <- file.path(data_path,paste0("prc_", exp, "_circ_data-seed",seed,".RDS"))
 
 } else {
   data_samp <- data
   
-  f_circsum <- file.path(data_path,paste0(exp, "_circ_data-alldata.RDS"))
+  f_circsum <- file.path(data_path,paste0("prc_", exp, "_circ_dat-all.RDS"))
 }
 ```
 
@@ -425,11 +381,9 @@ if (file.exists(f_circsum)) { # as RDS...
   
   # save, if first time
   if (subsample) {
-    write.csv(circ_summary, file = file.path(data_path,paste0(exp, "_circ_data_seed",seed,".csv")), row.names = F)
-    readr::write_rds(circ_summary, file = file.path(data_path,paste0(exp, "_circ_data_seed",seed,".RDS")))
+    readr::write_rds(circ_summary, file = file.path(data_path,paste0("prc_", exp, "_circ_dat-seed",seed,".RDS")))
   } else {
-    write.csv(circ_summary, file = file.path(data_path,paste0(exp, "_circ_data-alldata.csv")), row.names = F)
-    readr::write_rds(circ_summary, file = file.path(data_path,paste0(exp, "_circ_data-alldata.RDS")))
+    readr::write_rds(circ_summary, file = file.path(data_path,paste0("prc_", exp, "_circ_dat-all.RDS")))
   }
 
 }
@@ -438,21 +392,6 @@ circ_summary
 ```
 
 ```{r t-circ-stats, include=FALSE}
-# for display purposes
-# ct <- circ_summary %>% dplyr::select(-p) %>% 
-#                         rename(`$n$` = n, 
-#                                `$\\bar{\\theta}$` = theta_bar, 
-#                                `$\\bar{r}$` = r_bar,
-#                                `$Vm$` = vm, 
-#                                `$v$` = v, 
-#                                `$\\mu_{MLE}$` = mle_mu, 
-#                                `$\\mu CI_{lo}$` = bs_mu_ci_l, 
-#                               `$\\mu CI_{hi}$` = bs_mu_ci_h, 
-#                                `$\\kappa_{MLE}$` = mle_kappa, 
-#                                `$Rt$` = rt, 
-#                                `$p adj.$` = p_adjust) %>%
-#                             as.data.frame() 
-
 circ_summary %>% 
   kbl(escape = FALSE, 
       booktabs = TRUE, 
@@ -512,9 +451,9 @@ if (subsample & use_all) {
 
 ```{r calculate-boot-parameters, include=FALSE}
 if (use_all) {
-  f_mu_bs <- file.path(data_path,paste0(exp, "_boot_mu_kappa-all.RDS"))
+  f_mu_bs <- file.path(data_path,paste0("prc_", exp, "_boot_mu_kappa-all.RDS"))
 } else {
-  f_mu_bs <- file.path(data_path,paste0(exp, "_boot_mu_kappa_seed",seed,".RDS"))
+  f_mu_bs <- file.path(data_path,paste0("prc_", exp, "_boot_mu_kappa-seed",seed,".RDS"))
 } 
 
 if (file.exists(f_mu_bs)) {
@@ -531,12 +470,11 @@ if (file.exists(f_mu_bs)) {
   mu_bs_df <- do.call(rbind, lapply(mu_bs, function(x) as.data.frame(x)))
   
   if (use_all) {
-    save_name = file.path(data_path,paste0(exp, "_boot_mu_kappa-all"))
+    save_name = file.path(data_path,paste0("prc_", exp, "_boot_mu_kappa-all"))
     mu_bs_df.samp <- mu_bs_df
   } else {
-    save_name = file.path(data_path,paste0(exp, "_boot_mu_kappa_seed",seed))
+    save_name = file.path(data_path,paste0("prc_", exp, "_boot_mu_kappa-seed",seed))
   }
-  write.csv(mu_bs_df, file = paste0(save_name, ".csv"), row.names = F)
   readr::write_rds(mu_bs_df, file = paste0(save_name, ".RDS"))
 }
 
