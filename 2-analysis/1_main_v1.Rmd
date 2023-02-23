@@ -1,0 +1,1613 @@
+---
+title: "Flexible vocal timing adaptation to predictable and unpredictable playback noise"
+author: "Ava Kiai"
+output:
+  html_document: 
+    toc: yes
+geometry: margin=1in
+fontsize: 11pt
+params:
+  data_path: './../1-data' 
+  results_path: './../3-results'
+  exp: "exp_2"
+  plot_sm: TRUE
+  use_all: TRUE
+  subsample: FALSE
+  seed: 42
+---
+### About
+In this experiment, we played amplitude modulated white noise to a group of bats in order to investigate their ability to temporally modulate their calling behavior at the group level. 
+
+We hypothesized that bats would adapt the timing of their calls to avoid temporal overlap with the amplitude modulated noise.
+
+After extracting call timins from acoustic recordings (.wav files) and identifying the instantaneous period (or phase) in the real or simulated (as in the silent condition) amplitude modulation cycle, we analyzed the call onset data, primarily with circular statistics. 
+
+### Setup
+
+```{r knit-options, setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+```{r set-working-directory, eval=FALSE, include=FALSE}
+setwd(here::here())
+getwd()
+```
+
+```{r load-packages, echo=TRUE, message=FALSE, warning=FALSE}
+packages <- c("circular", "CircStats", "CircSpaceTime", "sjPlot", "yarrr", "janitor", "broom", "knitr",  "kableExtra", "car", "MASS", "emmeans", "rcompanion", "pscl", "randomForest", "chisq.posthoc.test", "viridis", "scales","ggh4x","ggside", "ggdist", "ggridges","gganimate","plotly","htmlwidgets","tidyverse")
+
+# Install packages not yet installed
+installed_packages <- packages %in% rownames(installed.packages())
+if (any(installed_packages == FALSE)) {
+  install.packages(packages[!installed_packages])
+}
+
+# Packages loading
+invisible(lapply(packages, library, character.only = TRUE))
+```
+
+```{r load-functions, include=FALSE}
+# Paths & Source functions
+sapply(list.files('./functions', pattern = ".R", full.names = T), source)
+```
+
+### Parameters
+```{r injected-parameters}
+str(params)
+
+# local paths
+data_path <- params$data_path
+results_path <- params$results_path
+tables_path <- file.path(results_path,'tables')
+  if (!dir.exists(tables_path)) dir.create(tables_path)
+figures_path <- file.path(results_path,'figures')
+  if (!dir.exists(figures_path)) dir.create(figures_path)
+models_path <- file.path(results_path,'models')
+  if (!dir.exists(models_path)) dir.create(models_path)
+sm_path <- file.path(results_path,'supplementary_figures')
+  if (!dir.exists(sm_path)) dir.create(sm_path)
+
+# experiment number
+exp <- params$exp
+
+# seed for subsampling
+seed <- params$seed
+
+# whether to use all data for circular stats
+use_all <- params$use_all
+subsample <- params$subsample
+
+# whether to plot supplementary plots/tables
+supplementary <- params$plot_sm
+```
+
+```{r static-parameters, include=FALSE}
+options(scipen=999,
+        dplyr.summarise.inform=FALSE)
+
+# color palettes and figure dimensions
+if (exp=="exp_1") {c_pal <- c("#0F6273","#D66502","#F5C951") # playback conditions
+                   pal <- c("#F46D43","#FFA054") # modulation rates
+                   w <- 3
+                   w2 <- 3
+                   w3 <- 3
+                   h <- 4
+                   h2 <- 5}
+if (exp=="exp_2") {c_pal <- c("#0F6273", "#D66502", "#E0685D")
+                   pal <- RColorBrewer::brewer.pal(n=8, name="Spectral")
+                   w <- 11
+                   w2 <- 4
+                   w3 <- 6
+                   h <- 6
+                   h2 <- 12}
+
+recolor <- function(x, which = NULL) {
+  if (exp == "exp_1") {
+    if (is.null(which)) {
+      y <- x + 
+        scale_fill_manual(values = pal) +
+        scale_color_manual(values = pal)
+    } else if (which=="c") {
+      y <- x + 
+        scale_color_manual(values = pal)
+    } else if (which=="f") {
+      y <- x + 
+        scale_fill_manual(values = pal) }
+  } else {
+    y <- x
+  }
+  return(y)
+}
+```
+
+#### Load data
+```{r load-data}
+# load data
+data <- readr::read_rds(file.path(data_path,'input',paste0(exp, "_data.RDS"))) %>%
+  mutate(start_phase_circ = circular(start_phase, units="radians", zero = 0, modulo = "2pi", rotation = "counter"),.after ="start_phase") 
+
+# data for averaging histograms (modulation variable is numeric-ish)
+data_2proc <- data %>%
+  mutate(modulation = factor(modulation, 
+                             levels = sort(unique(data$modulation))))
+
+# data for remaining analyses (modulation variable is character-ish, better for plotting)
+data <- data %>%
+  mutate(modulation = factor(modulation, 
+                             levels = sort(unique(data$modulation)), 
+                             labels = paste0(as.character(sort(unique(data$modulation))),"Hz")))
+str(data)
+
+# save interim data manips to 1-data/output
+data_path <- file.path(data_path,'output')
+  if (!dir.exists(data_path)) dir.create(data_path)
+
+```
+
+```{r early-data, include=FALSE}
+# pull out data from only the first ~7.5-8 minutes of each condition from only the first recording day
+if (exp=="exp_1") {
+  dat1 <- data_2proc %>% 
+    dplyr::filter(session == 1, as.numeric(file_no)==1) 
+  # 8 Hz groups 1-2 were recorded in 1-minute intervals and numberings did not reset 
+  # with recording block; this is quite ugly/hacky but works for the moment
+  dat2 <- rbind(data_2proc %>%
+    dplyr::filter(modulation == 8, session == 1, group == 1, 
+                  condition == "full-band masker",
+                  as.numeric(file_no) %in% seq(66,73)),
+      data_2proc %>%
+    dplyr::filter(modulation == 8, session == 1, group == 1, 
+                condition == "half-band masker",
+                as.numeric(file_no) %in% seq(127,134)),
+      data_2proc %>%
+    dplyr::filter(modulation == 8, session == 1, group == 2, 
+                condition == "full-band masker",
+                as.numeric(file_no) %in% seq(63,70)),
+      data_2proc %>%
+    dplyr::filter(modulation == 8, session == 1, group == 2, 
+                condition == "half-band masker",
+                as.numeric(file_no) %in% seq(124,131)))
+  data_init <- rbind(dat1,dat2)
+} else if (exp=="exp_2") {
+  dat1 <- data_2proc %>% 
+    dplyr::filter(session == 1, 
+                  condition=="steady-state masker" |  condition=="silence") 
+  dat2 <- data_2proc %>% 
+    dplyr::filter(session == 1, condition=="random masker", as.numeric(file_no)==1, minute <=8)
+  data_init <- rbind(dat1, dat2)
+}  
+
+#str(dat)
+```
+
+### Summary Stats
+
+A few rough summary statistics. 
+Note that each row is an observation (call event), with parameters:
+
+- group: experimental group (1:4) (Note that for experiment 1, there were 8 groups
+of bats tested in each modulation rate context, but each is labelled 1-4.)
+- session: recording day (1:5)
+- part: experimental block (1:3), silent condition is always part 1
+- condition: playback condition
+- modulation: amplitude modulation rate for masking conditions
+- minute: minute since the start of the recording file in which the call occurred
+- start_seconds: timestamps of call onsets in seconds since the start of the file
+- stop_seconds: ibid. for call offsets
+- start_sp: samples since start of file at call onset
+- end_sp: ibid. for call offsets
+- start_cycle: nth cycle of the corresponding modulation rate in the corresponding file at call onset
+- end_cycle: ibid. at call onset
+- start_phase: moment in the corresponding modulation cycle (in radians) at call onset
+- start_phase_circ: ibid., but of class circular
+- end_phase: ibid. at call offset
+- start_per: timepoint in the corresponding modulation period (in seconds) at call onset
+- end_per: ibid. at call offset
+- duration: call offset - call onset (in seconds)
+- onset_interval: call onset - previous call's call onset (is NA if call is the first in the file)
+- class: type of call (for now, all are labelled "call")
+- file_no: index of recording file, indicating the order of recorded files from the corresponding experimental block
+- familiarization: number of days in which bats were housed together as a group prior to the first recording day
+- order: randomization/counter-balancing order for the presentation of masking conditions
+
+```{r summary-alldata}
+#summary(data)
+```
+
+Total number of calls:
+```{r n}
+nrow(data)
+#1,425,067 # exp 1
+#1,088,994 # exp 2
+# = 2,514,061 # total
+```
+
+Call durations:
+```{r durations}
+# durations
+# data1 <- data
+# data2 <- data
+# data <- rbind(data1,data2)
+# nrow(data)
+
+summary(data$duration)
+# #    Min.  1st Qu.   Median     Mean  3rd Qu.     Max. 
+# #0.000996 0.001704 0.003372 0.004246 0.005036 0.704744 
+
+IQR(data$duration)
+# # 0.003332
+```
+
+
+### Distribution of call onsets in the modulation cycle
+
+Calculate histogram averages (essentially, a PSTH)
+
+```{r average-histograms}
+
+call_summary1 <- get_avg_hist(data_2proc, NULL, list("group","session"), "period", 
+                              by_group = TRUE, by_session = TRUE)
+call_summary60 <- get_avg_hist(data_2proc, 60, list("group","session"), "period")
+
+# optionally: check that the two have the correct # of bins
+# call_summary1$generic %>% group_by(modulation) %>% summarise(sort(unique(mids),decreasing = T)[2])
+# call_summary60$generic %>% group_by(modulation) %>% summarise(n=length(unique(mids)))
+
+```
+
+First, we asked: Did the presence of playback noise affect the distribution of emitted calls within the modulation cycle?
+
+Here we plot an averaged histogram of detected call onsets 
+(binned calls (1 ms bins) summed over all cycles, averaged over groups and recording days):
+
+Points are mean # calls, shaded areas are +- sem...
+
+```{r p-averaged-histograms, echo=TRUE, out.width = "50%"}
+
+# average call counts all at once, 1 ms bins
+p <- p.hist_avg_dot_kwargs(dat = call_summary1$generic, facets = c("condition","modulation"))
+ print(p)
+ ggsave(file.path(figures_path,paste0(exp, '_fig1a.png') ), p, width = w, height = 5)
+
+# average call counts with fixed y-axis, to better illustrate the relative calling rate between conditions
+p2 <- p.hist_avg_dot_kwargs_fixedy(dat = call_summary1$generic, facets = c("","modulation")) 
+  print(p2)
+ ggsave(file.path(figures_path,paste0(exp, '_fig1a-alt1.png') ), p2, width = w, height = 5)
+
+# average call counts with fixed y-axis, with 60 ms bins for each modulation rate, to show trend on the same x-scale across conditions  
+p3 <- p.hist_avg_dot_kwargs_fixedy(dat = call_summary60$generic, facets = c("","modulation")) 
+  print(p3)
+  ggsave(file.path(figures_path,paste0(exp, '_fig1a-alt2.png') ), p3, width = w, height = 5) 
+```
+
+```{r sp-averaged-histograms, echo=supplementary, eval=supplementary, out.width = "30%"}
+# show average call counts (with and without fixed y axis) for each group, and for each recording day ("session")
+for (m in sort(unique(call_summary1$group$modulation))) {
+ p1 <- p.hist_avg_dot_kwargs(dat = call_summary1$group %>% filter(modulation == m), 
+                             facets = c("condition","group")) +
+                             ggtitle(paste0(m, ": by group"))
+ p2 <- p.hist_avg_dot_kwargs_fixedy(dat = call_summary1$group %>% filter(modulation == m), 
+                                    facets = c("","group")) +
+                             ggtitle(paste0(m, ": by group")) 
+ p3 <- p.hist_avg_dot_kwargs(dat = call_summary1$session %>% filter(modulation == m),
+                             facets = c("condition","session")) +
+                             ggtitle(paste0(m, ": by day"))
+ 
+ print(p1); print(p2); print(p3)
+ ggsave(file.path(sm_path,paste0(exp, '_figs3a_',m,'.png') ), 
+        p1, width = 7, height = 5)
+ ggsave(file.path(sm_path,paste0(exp, '_figs3a_',m,'-alt1.png') ), 
+        p2, width = 7, height = 5)
+ ggsave(file.path(sm_path,paste0(exp, '_figs3b_',m,'.png') ), 
+        p3, width = 7, height = 5)
+}
+```
+
+```{r sp-averaged-histograms-initial, echo=supplementary, eval=supplementary, out.width = "50%"}
+# show average hist of binned calls for the first 7.5-8 mins of continuous AM playback for each mod.
+call_summary1_init <- get_avg_hist(data_init, NULL, list("group"), "period", by_group = TRUE)
+#str(data_init)
+ 
+firsts <- p.hist_avg_col(dat = call_summary1_init$group %>% 
+                 dplyr::filter(condition=="full-band masker" | condition=="steady-state masker"), 
+               facets = c("modulation","group"))
+
+print(firsts)
+
+ggsave(file.path(sm_path,paste0(exp, '_figs4.png') ), firsts, width = 7, height = h2)
+
+```
+
+### Circular Statistics
+To analyze the distribution of call onsets within the modulation cycle, we must
+use circular statistics (with functions from the package `circular`), since the 
+nature of our data is cyclical.
+
+First we will compute the following summary statistics:
+
+- Mean Resultant Direction ($\bar{\theta}$)
+- Mean Resultant Length ($\bar{R}$)
+- Circular Variance ($Vm$): $1-R$
+- Circular Standard Deviation ($v$): $\sqrt{1-2*log(\bar{R})}$                             
+- MLE Mu ($\mu$): mean parameter estimated from the maximum likelihood
+von Mises distribution (`circular::mle.vonmises()`)
+- MLE Kappa ($\kappa$): concentration parameter estimated from the 
+maximum likelihood von Mises distribution (`circular::mle.vonmises()`)
+- MLE CIs for $\bar{\theta}$: confidence intervals for the mean
+parameters estimated from the maximum likelihood von Mises distribution 
+(`circular::mle.vonmises.bootstrap.ci()`)
+
+Then, we'll get bootsrapped mean and concentration parameters from the whole dataset.
+
+-----
+
+We predicted that calls emitted in presence of modulated noise would tend to
+"cluster" unimodally in the hemisphere corresponding to the amplitude trough. 
+Conversely, we predicted that the distribution of call onsets emitted in silence
+would show no clustering, and therefore resemble a uniform distribution.
+
+This prediction entails two specific hypotheses:
+
+1. Distribution of calls detected in silence will be equivalent to a uniform distribution, 
+while that of calls detected in the presence of masking noise will deviate from the uniform distribution.
+  --> Method: Rayleigh test of uniformity (`circular::rayleigh.test(x, mu=circular(0))`)
+
+2. The distribution of calls in the playback conditions will each besignificantly different from the silence condition.
+  --> Method: Mardia-Watson-Wheeler non-parametric test of homogeneous samples (`circular::watson.wheeler.test(x,y)`),
+      where differences between samples can be in either the mean or the variance.
+
+#### Calculate summary and distribution statistics
+
+```{r subsample-data, include=FALSE}
+
+if (subsample) {
+  check_n <- data %>% group_by(condition, modulation) %>% summarise(n = n())
+  
+  set.seed(seed) #.Random.seed)
+  data_samp <- data %>% group_by(condition, modulation) %>% slice_sample(n = min(check_n$n))
+  
+  print(paste0("Sub-sampled data: N = ", nrow(data_samp), ". Original data: N = ", nrow(data), ". N in each group = ", min(check_n$n)))
+  
+  # if circ data exists, prepare for loading
+  f_circsum <- file.path(data_path,paste0(exp, "_circ_data_seed",seed,".RDS"))
+
+} else {
+  data_samp <- data
+  
+  f_circsum <- file.path(data_path,paste0(exp, "_circ_data-alldata.RDS"))
+}
+```
+
+**In which conditions were call onset distributions unimodally clustered?**
+
+```{r calculate-circular-stats, message=FALSE, warning=FALSE}
+# prepare data for analysis: split into lists, one for each modulation x condition case
+# data is subsampled if requested in header
+
+data_split <-  data_samp %>% group_by(modulation, condition) %>% group_split()
+
+# label and convert to circular data
+circ_data <- lapply(data_split, function(x) 
+  list(modulation = unique(x$modulation),
+       condition = unique(x$condition),
+       phase = x$start_phase_circ)) 
+
+
+if (file.exists(f_circsum)) { # as RDS...
+  circ_summary <- readr::read_rds(f_circsum)
+  
+} else {
+  # calculate values:
+  circ_datsum <- lapply(circ_data, 
+         function(x) tibble(modulation = x$modulation, 
+                            condition = x$condition,
+                            n = length(x$phase),
+                            theta_bar = mean.circular(x$phase, na.rm = T), # angular mean
+                            r_bar = rho.circular(x$phase, na.rm = T), # mean resultant length
+                            vm = var.circular(x$phase), 
+                            v = sd.circular(x$phase),  
+                            # Test of uniformity:
+                            rt = rayleigh.test(x$phase, mu=circular(0))$statistic,
+                            p = rayleigh.test(x$phase, mu=circular(0))$p.value,
+                            # MLE von Mises:
+                            mle_mu = mle.vonmises(x$phase)$mu,
+                            bs_mu_ci_l = mle.vonmises.bootstrap.ci(x$phase, alpha=.05)$mu.ci[1], 
+                            bs_mu_ci_h = mle.vonmises.bootstrap.ci(x$phase, alpha=.05)$mu.ci[2],
+                            mle_kappa = mle.vonmises(x$phase)$kappa) 
+                        )  
+  
+  # wrangle & correct p values
+  circ_summary <- tibble(do.call(rbind,circ_datsum))  %>%
+                  mutate(p_adjust = p.adjust(p, method ="bonferroni"), .after = "p") %>%
+                  mutate(across(where(is.numeric), round, 3))
+  
+  head(circ_summary)
+  
+  # save, if first time
+  if (subsample) {
+    write.csv(circ_summary, file = file.path(data_path,paste0(exp, "_circ_data_seed",seed,".csv")), row.names = F)
+    readr::write_rds(circ_summary, file = file.path(data_path,paste0(exp, "_circ_data_seed",seed,".RDS")))
+  } else {
+    write.csv(circ_summary, file = file.path(data_path,paste0(exp, "_circ_data-alldata.csv")), row.names = F)
+    readr::write_rds(circ_summary, file = file.path(data_path,paste0(exp, "_circ_data-alldata.RDS")))
+  }
+
+}
+
+circ_summary
+```
+
+```{r t-circ-stats, include=FALSE}
+# for display purposes
+# ct <- circ_summary %>% dplyr::select(-p) %>% 
+#                         rename(`$n$` = n, 
+#                                `$\\bar{\\theta}$` = theta_bar, 
+#                                `$\\bar{r}$` = r_bar,
+#                                `$Vm$` = vm, 
+#                                `$v$` = v, 
+#                                `$\\mu_{MLE}$` = mle_mu, 
+#                                `$\\mu CI_{lo}$` = bs_mu_ci_l, 
+#                               `$\\mu CI_{hi}$` = bs_mu_ci_h, 
+#                                `$\\kappa_{MLE}$` = mle_kappa, 
+#                                `$Rt$` = rt, 
+#                                `$p adj.$` = p_adjust) %>%
+#                             as.data.frame() 
+
+circ_summary %>% 
+  kbl(escape = FALSE, 
+      booktabs = TRUE, 
+      format = "html",
+      caption = "Circular Statistics") %>%
+  kable_styling() %>%
+  add_header_above(c(" " = 2, "Summary Statistics" = 5,
+                     "Rayleigh's Test" = 3, "MLE von Mises" = 4)) %>%
+  kable_styling(font_size = 8, full_width = TRUE) %>%
+  column_spec(1, width = "20mm") %>%
+  column_spec(2, width = "60mm") %>%
+  column_spec(2:13, width = "20mm") %>%
+  kable_paper() %>%
+  cat(., file = file.path(tables_path,paste0(exp, "_circ_stats.html")))
+```
+
+
+#### Plot circular call density
+Now, let's plot our call count data (as a density rather than raw call count) as before,
+but on the polar plane and indicate the mean direction and resultant length of the resultant
+vector.
+
+```{r fix-confint-range, include=FALSE}
+# if confidence intervals for angular means span 0, split the span over two rows for accurate plotting
+circ_summary_plot <- confint_wrap(circ_summary) 
+```
+
+```{r p-circular-density-histograms, out.width = "80%"}
+circ_density <- p.circ_density(dat = data_samp, circ_dat = circ_summary_plot, bins = 30) %>% recolor(which="f")
+
+circ_density
+
+if (subsample) {
+  ggsave(file.path(figures_path,paste0(exp, "_fig1b_",seed,".png")), circ_density, width = w, height = 5)
+} else {
+  ggsave(file.path(figures_path,paste0(exp, '_fig1b.png')), circ_density, width = w, height = 5)
+}
+```
+
+
+#### Calculate bootstrapped angular vectors 
+
+**How consistent was the clustering, if present?**
+
+```{r use-all-eval-boot, include=FALSE}
+
+if (subsample & use_all) {
+  wdata_split <-  data %>% group_by(modulation, condition) %>% group_split()
+  wcirc_data <- lapply(wdata_split, function(x)
+   list(modulation = x$modulation[1],
+        condition = x$condition[1],
+        phase = x$start_phase_circ))
+} else{
+  wcirc_data <- circ_data
+}
+```
+
+```{r calculate-boot-parameters, include=FALSE}
+if (use_all) {
+  f_mu_bs <- file.path(data_path,paste0(exp, "_boot_mu_kappa-all.RDS"))
+} else {
+  f_mu_bs <- file.path(data_path,paste0(exp, "_boot_mu_kappa_seed",seed,".RDS"))
+} 
+
+if (file.exists(f_mu_bs)) {
+  mu_bs_df <- readr::read_rds(f_mu_bs)
+
+} else {
+  # calculate bootstrapped means & concentrations: 1000 per condition x modulation
+  mu_bs <- lapply(wcirc_data, function(x) list(modulation = x$modulation, 
+                                            condition = x$condition, 
+                                            mu = as.numeric(mle.vonmises.bootstrap.ci(x$phase)$mu),
+                                            kappa = as.numeric(mle.vonmises.bootstrap.ci(x$phase)$kappa),
+                                            ci_lo = as.numeric(mle.vonmises.bootstrap.ci(x$phase)$mu.ci[1]),
+                                            ci_hi = as.numeric(mle.vonmises.bootstrap.ci(x$phase)$mu.ci[2]))) 
+  mu_bs_df <- do.call(rbind, lapply(mu_bs, function(x) as.data.frame(x)))
+  
+  if (use_all) {
+    save_name = file.path(data_path,paste0(exp, "_boot_mu_kappa-all"))
+    mu_bs_df.samp <- mu_bs_df
+  } else {
+    save_name = file.path(data_path,paste0(exp, "_boot_mu_kappa_seed",seed))
+  }
+  write.csv(mu_bs_df, file = paste0(save_name, ".csv"), row.names = F)
+  readr::write_rds(mu_bs_df, file = paste0(save_name, ".RDS"))
+}
+
+head(mu_bs_df)
+```
+
+
+#### Plot bs parameters in the polar plane
+```{r p-boot-circ, out.width = "50%"}
+circ_params <- p.circ_params(mu_bs_df, compress = T)  %>% recolor()
+
+
+circ_params
+
+ggsave(file.path(figures_path,paste0(exp, '_fig1c.png')), circ_params, width = 3, height = 6)
+```
+
+##### ... and in the cartesian plane
+```{r p-boot-sides, out.width = "50%"}
+mu_kappa <- p.mu_kappa(dat = mu_bs_df %>% 
+                         group_by(modulation, condition) %>% 
+                         slice_sample(n = 500)) %>% recolor()
+mu_kappa
+
+ggsave(file.path(figures_path,paste0(exp, '_fig1d-500.png') ), mu_kappa, width = 6, height = 6)
+
+```
+
+
+#### [Mardia]-Watson-Wheeler Homogeneity of Samples
+
+We now compute frequentist non-parametric analyses for whether the distributions of
+calls observed in our different modulation and masking conditions are identical.
+
+The null hypothesis is that the distributions are identical, either in their means
+or their variances:
+
+##### Compare playback conditions within modulation rate contexts
+
+**Did distributions of call onsets differ between playback conditions at each modulation rate?**
+
+```{r watson-wheeler-test}
+
+circ_data_df <- do.call(rbind, lapply(circ_data, function(x) as.data.frame(x)))
+
+ww_tests <- lapply(sort(unique(circ_data_df$modulation)), function(x) 
+  watson.wheeler.test(phase ~ condition,circ_data_df[circ_data_df$modulation==x,]) %>%
+    broom::tidy() %>%
+     mutate(across(where(is.numeric), round, 3)) %>%
+      mutate(modulation = x,.before=1)) %>%
+  do.call(rbind,.) %>%
+  mutate(p.adjust = p.adjust(p.value, method ="bonferroni"), .after = "p.value") %>%
+  janitor::clean_names()
+
+ww_tests
+```
+
+```{r save-watson-wheeler, include=FALSE}
+ ww_tests %>%
+  kbl(escape = FALSE, 
+      booktabs = TRUE, 
+      format = "html",
+      caption = "Watson-Wheeler test for homogeneity of groups (within modulation rates)") %>%
+  kable_styling() %>%
+  cat(., file = file.path(tables_path,paste0(exp, "_watson-wheeler.html")))
+```
+
+
+#### Rao's test of homogeneity of means, dispersions
+
+Test if means or vector lengths were significantly different between conditions and,
+separately, across modulation rates:
+
+
+#### Compare playback conditions within each modulation rate
+
+**How did distributions of call onsets differ between playback conditions at each modulation rate?**
+**In their angular means or their polar concentrations?**
+
+```{r rao-tests}
+rao_testsm <- do.call(rbind, lapply(sort(unique(circ_data_df$modulation)), function(x) {
+    df <- circ_data_df[circ_data_df$modulation==x,] %>% group_split(condition)
+    rao <- circular::rao.test(lapply(df,'[[', 'phase'))
+    data.frame(modulation = as.factor(x),
+               test = as.factor(c("polar vectors", "dispersions")), 
+               statistic = rao$statistic, df = rao$df, p_value = rao$p.value) %>% 
+      mutate(across(where(is.numeric), round, 3)) %>% 
+      mutate(p_adjust = p.adjust(p_value, method ="bonferroni"), .after = "p_value") 
+    }))
+
+# test differences for playback conditions within mod rates
+rao_testsm
+
+rao_testsc <- do.call(rbind, lapply(sort(unique(circ_data_df$condition)), function(x) {
+    df <- circ_data_df[circ_data_df$condition==x,] %>% group_split(modulation)
+    rao <- circular::rao.test(lapply(df,'[[', 'phase'))
+    data.frame(condition = as.factor(x),
+               test = as.factor(c("polar vectors", "dispersions")), 
+               statistic = rao$statistic, df = rao$df, p_value = rao$p.value) %>% 
+      mutate(across(where(is.numeric), round, 3)) %>% 
+      mutate(p_adjust = p.adjust(p_value, method ="bonferroni"), .after = "p_value")
+    }))
+
+# test differences for mod rates within conditions
+rao_testsc 
+
+```
+
+```{r save-rao, include=FALSE}
+rao_testsm %>%
+  kbl(escape = FALSE, 
+      booktabs = TRUE, 
+      format = "html",
+      caption = "Rao test for homogeneity of angular means & dispersions") %>%
+  kable_styling() %>%
+  cat(., file = file.path(tables_path,paste0(exp, "_rao-modulations.html")))
+
+rao_testsc %>%
+  kbl(escape = FALSE, 
+      booktabs = TRUE, 
+      format = "html",
+      caption = "Rao test for homogeneity of angular means & dispersions") %>%
+  kable_styling() %>%
+  cat(., file = file.path(tables_path,paste0(exp, "_rao-conditions.html")))
+```
+
+
+#### Post-hoc
+Next, let's compute post-hoc comparisons for each significant test (by modulation rate)
+above by comparing each pair of masking conditions within each modulation condition for both
+rates, again using the Rao test.
+
+```{r rao-post-hoc}
+do_contrasts <- rao_testsm$modulation[rao_testsm$p_value<0.05]
+
+circ_contrasts <- lapply(do_contrasts, function(x) {
+  df <- circ_data_df[circ_data_df$modulation==x,]
+  pairs <- t(combn(unique(df$condition), m=2))
+
+  tests <- lapply(seq.int(nrow(pairs)), function(y) {
+    condlist <- df[df$condition %in% pairs[y,],] %>% group_split(condition)
+    rao <- circular::rao.test(condlist[[1]]$phase, condlist[[2]]$phase)
+    data.frame(modulation = as.factor(x),
+               condition = as.factor(paste(pairs[y,],collapse = " vs. ")),
+               test = as.factor(c("polar vectors", "dispersions")), 
+               statistic = rao$statistic, df = rao$df, p_value = rao$p.value) %>% 
+      mutate(across(is.numeric, round, 3)) %>% 
+      mutate(p_adjust = p.adjust(p_value, method ="bonferroni"), .after = "p_value")
+    }) %>% do.call(rbind,.) 
+  }
+ )  %>% do.call(rbind,.)
+
+circ_contrasts
+```
+
+```{r save-rao-post-hoc, include=FALSE}
+circ_contrasts %>%
+  kbl(escape = FALSE, 
+      booktabs = TRUE, 
+      format = "html",
+      caption = "Rao test for homogeneity of angular means & dispersions within mod rates") %>%
+  kable_styling() %>%
+  cat(., file = file.path(tables_path,paste0(exp, "_rao-modulations_contrasts_within.html")))
+```
+
+
+
+
+### Rate of vocalizations
+
+Let's look at the overall number of calls observed in the three experimental conditions
+and within the two tested modulation rates.
+
+#### Chi-square test for number of observed calls [not used in paper]
+
+Two post-hoc hypotheses:
+1. The number of calls observed in the silent condition would be be greater than that in the masking conditions.
+- Method: Pearson's Chi-squared Test for Goodness-of-Fit
+- H1: Observed calls unevenly distributed across groups.
+
+2. Fewer calls would be observed for the faster masking conditions compared with the slower masking conditions, due to the greater masking effect elicited by more rapid (i.e. "noisier") amplitude modulations. 
+- Method: Pearson's Chi-squared Test for Homogeneity
+- H1: Two samples differ in their distribution between groups (levels of masking).
+
+Contingency tables:
+```{r contingency-table}
+n_calls <- data %>% group_by(modulation, condition) %>% summarise(n = n())
+
+(n_conttable <- addmargins(table(data$modulation,data$condition), c(1,2)))
+```
+
+Goodness of fit tests (test of imbalanced observations) for conditions within each modulation rate:
+```{r chi-sq-modrates, echo=FALSE}
+n_table <- table(data$modulation,data$condition) %>% as.matrix() %>% t()
+
+# chi-square test for goodness-of-fit: 
+gof.test <- lapply(seq_len(ncol(n_table)), function(x) 
+  chisq.test(n_table[,x], 
+             p = rep(1/length(n_table[,x]),length(n_table[,x]))
+             )) %>%
+  set_names(colnames(n_table))
+
+#gof.test
+
+# APA formatted output
+lapply(seq_along(gof.test), function(x)
+  cat('\t', names(gof.test[x]),': ', yarrr::apa(gof.test[[x]]) ,'\n') )
+```
+
+Goodness of fit tests for rates within conditions:
+```{r chi-sq-conditions, echo=FALSE}
+# chi-square test for goodness-of-fit: 
+gof.test2 <- lapply(seq_len(nrow(n_table)), function(x) 
+  chisq.test(n_table[x,], 
+             p = rep(1/length(n_table[x,]),length(n_table[x,]))
+             )) %>%
+  set_names(rownames(n_table))
+
+# gof.test2
+
+# APA formatted output
+lapply(seq_along(gof.test2), function(x)
+  cat('\t', names(gof.test2[x]),': ', yarrr::apa(gof.test2[[x]]) ,'\n') )
+```
+
+In the chi-square results below, columns refer to the following data:
+
+- `observed`: the observed counts,
+- `expected`: the expected counts under the null hypothesis,
+- `residuals`: the Pearson residuals, $(observed - expected) / \sqrt(expected)$,
+- `stdres`: standardized residuals, $(observed - expected) / \sqrt(V)$,
+
+where $V$ is the residual cell variance.
+
+```{r chi-sq-all, echo=FALSE}
+chisq.test <- chisq.test(n_table)
+
+cat("Pearson's Chi-squared test for each modulation rate x condition: \n")
+cat('\t Mods vs. Conds: ', yarrr::apa(chisq.test) ,'\n')
+
+broom::augment(chisq.test) %>% 
+  mutate(across(where(is.numeric), round, 3)) %>% janitor::clean_names() %>%
+  rename(condition = var1, modulation = var2)
+
+# install.packages("chisq.posthoc.test")
+# chisq.posthoc.test::chisq.posthoc.test(n_table, method = "bonferroni")
+
+```
+
+### Negative Binomial Regression 
+
+```{r prepare-nb-reg, message=TRUE, warning=FALSE, include=FALSE}
+n_calls_reg <- data %>% group_by(modulation, condition, group, as.factor(session)) %>% summarise(n = n())
+n_calls_reg
+```
+
+First we modelled our counts using a Poisson GLM. However, we observed that the 
+data were highly overdispersed. For example, for the 8 Hz context, overdispersion was:
+
+```{r check-poisson}
+# Poisson Regression 
+calls.glm <- glm(n ~  condition, family = poisson, data = n_calls_reg[n_calls_reg$modulation=="8Hz",])
+# model summary
+  # summary(calls.glm)
+
+# check for overdispersion
+OD.pr <- sum(residuals(calls.glm, type="pearson")^2)/df.residual(calls.glm)
+print(OD.pr)
+```
+
+Therefore, we proceeded with a Negative Binomial GLM, which allows for overdispersion in the count variable.
+
+We ran a model for each modulation rate separately, so that the 
+reference group (Intercept) is meaningful for all model terms for our purposes, i.e.
+coefficient indicate  changes in calling rate between silent baseline and each masking condition.
+
+Our  models are given by:
+$$ln(\widehat{calls_{i}}) = Intercept +
+\beta_1 Mask(condition_j = 2) + \beta_3 Mask(condition_j = 3)$$
+
+Where $i$ gives the modulation rate and $j$ gives the level of the condition manipulation. 
+
+Thus,
+$$\widehat{calls_i} = e^{Intercept + \beta_1 Mask_{condition_j = 2}+...}$$
+defines the rate of calling per hour (the sampling time for each condition), given
+an arbitrary combination of modulation rate and masking condition.
+
+We also ran a "big" model that included all interactions, for which coefficients would
+have a more complex meaning but analyses of variance would provide a global picture. 
+
+#### Run all models
+```{r run-nb-model-big}
+big.model <-  run_negbinom_model(n_calls_reg, 
+                                 formula = "n ~ condition * modulation", 
+                                 contformula = "~ modulation | condition ")
+
+# overdispersion
+print(big.model$dispersion)
+```
+
+
+```{r run-nb-model-ea}
+all.models <- lapply(sort(unique(n_calls_reg$modulation)), function(x) 
+                      md <- run_negbinom_model(n_calls_reg %>% filter(modulation==x)) )
+  
+names(all.models) <- sort(unique(n_calls_reg$modulation))
+
+# overdispersion
+print(do.call(rbind, lapply(all.models, '[[', 'dispersion')) )
+```
+
+```{r save-model-tables, include=FALSE}
+lapply(seq_along(all.models), function(x) 
+      sjPlot::tab_model(all.models[[x]]$model, show.aic = TRUE, 
+                        show.dev = T, show.se = T,
+                        title = paste("Observed calls per hour in",names(all.models[x]),"modulated noise"), 
+                        file = file.path(tables_path,paste0(exp, "_nb_",names(all.models[x]),".html")) )) 
+```
+
+#### Anova
+Note that these are 1-way ANOVAs from different models put together in one table, not
+a single ANOVA.
+```{r nb-anova}
+# pull out anova tables
+(anova <- do.call(rbind, lapply(all.models, '[[', 'deviance')) %>% 
+   mutate(across(is.numeric, round, 2)))
+```
+
+```{r save-model-deviance-tables, message=FALSE, warning=FALSE, include=FALSE}
+ anova %>%
+  kbl(escape = FALSE, 
+      booktabs = TRUE, 
+      format = "html",
+      caption = "Type II Analysis of Deviance") %>%
+  kable_styling() %>%
+  cat(., file = file.path(tables_path,paste0(exp, "_deviance_tables_anova.html")))
+
+```
+
+Below, the analysis of variance for the large model with all features:
+```{r nb-anova-big}
+big.model$deviance
+```
+
+#### Incidence Rate Ratios (IRR)
+The IRRs give us the change in the per hour rate [of calling] from baseline to each condition.
+```{r combined-IRRs}
+# IRR
+IRRs <- do.call(rbind, lapply(all.models, '[[', 'IRR')) %>%
+   mutate(across(is.numeric, round, 2)) %>%
+   mutate(modulation = str_split(row.names(.),"[.]",simplify = T)[,1], .before=1) %>%
+   mutate(coef = str_remove(str_split(row.names(.),"[.]",simplify = T)[,2],"condition"), .after=1) %>%
+   remove_rownames()
+IRRs
+```
+
+```{r t-IRRs, include=FALSE}
+IRRkbl <- IRRs %>%
+    kbl(escape = FALSE, 
+      booktabs = TRUE, 
+      format = "html",
+      caption = "IRR") %>%
+  kable_styling() 
+
+rows <- seq(1,nrow(IRRs),length(unique(IRRs$coef)))
+for (p in seq_along(unique(IRRs$modulation))) {
+  pack_rows(IRRkbl, unique(IRRs$modulation)[p], rows[p], rows[p]+2)
+  }
+            
+IRRkbl %>%
+  cat(., file = file.path(results_path,paste0("/tables/",exp,"_IRRs.html"))) 
+
+
+```
+
+```{r p-model-estimates, include=FALSE}
+lapply(seq_along(all.models), function(x) {
+       p <- all.models[[x]]$plot 
+       ggsave(file.path(sm_path,paste0(exp, '_IRR_', names(all.models[x]),'.png') ), p, width = 5, height = 3)})
+
+#big.model$plot
+```
+
+
+#### Marginal mean contrasts
+Below are the post-hoc contrasts from estimated marginal means:
+```{r t-wrangle-post-hoc-tables}
+(contrasts <- do.call(rbind, lapply(all.models, '[[', 'contrasts')) %>%
+   mutate(across(is.numeric, round, 2)) %>%
+   mutate(modulation = str_split(row.names(.),"[.]",simplify = T)[,1], .before=1) %>%
+   remove_rownames() %>%
+   dplyr::select(-c("df", "null")) %>% 
+   dplyr::rename(IRR = ratio))
+```
+
+
+```{r t-big-model-post-hoc-table, eval=FALSE, include=FALSE}
+# Contrasts for the big model:
+big.model$contrasts %>%
+   dplyr::select(-c("df", "null")) %>% 
+   dplyr::rename(IRR = ratio)
+```
+
+
+```{r t-save-post-hoc-tables, include=FALSE}
+# marginal means
+contrasts %>%
+    kbl(escape = FALSE, 
+      booktabs = TRUE, 
+      format = "html",
+      caption = "Estimated Marginal Means") %>%
+  kable_styling() %>%
+  cat(., file = file.path(tables_path,paste0(exp, "_mm_contrasts.html"))) 
+```
+
+#### Model predictions
+Now let's plot the model predictions to ensure it's a good fit:
+```{r p-model-predictions, echo=TRUE}
+
+preds <- do.call(rbind, lapply(all.models, '[[', 'predictions')) %>%
+   mutate(across(is.numeric, round, 2)) %>%
+   mutate(modulation = factor(str_split(row.names(.),"[.]",simplify = T)[,1], 
+          levels = sort(unique(data$modulation))),.before=1) %>%
+   remove_rownames()
+
+n_pred <- p.n_pred(preds) %>% recolor()
+
+n_pred
+ggsave(file.path(figures_path,paste0(exp, '_fig1e.png') ), n_pred, width = 5, height = 4)
+
+```
+
+### Changes in call rate between modulation rate contexts
+
+Now let's see if there were changes in the overall rate of calling between different
+modulation rate contexts for the same playback condition.
+```{r model-across-conditions}
+
+all.models2 <- lapply(sort(unique(n_calls_reg$condition)), function(x) 
+                      md <- run_negbinom_model(n_calls_reg %>% filter(condition==x), 
+                                               formula = "n ~  modulation", 
+                                               contformula = "~ modulation")  )
+  
+names(all.models2) <- sort(unique(n_calls_reg$condition))
+```
+
+```{r save-model-tables2, include=FALSE}
+lapply(seq_along(all.models2), function(x) 
+      sjPlot::tab_model(all.models2[[x]]$model, show.aic = TRUE, 
+                        show.dev = T, show.se = T,
+                        title = paste("Observed calls per hour in",names(all.models2[x])," noise"), 
+                        file = file.path(tables_path,paste0(exp, "_nb_",names(all.models2[x]),".html")) )) 
+```
+
+#### Anova
+```{r nb-anova2}
+# pull out anova tables
+(anova2 <- do.call(rbind, lapply(all.models2, '[[', 'deviance')) %>% 
+   mutate(across(is.numeric, round, 2)))
+```
+
+```{r save-model-deviance-tables2, include=FALSE}
+ anova2 %>%
+  kbl(escape = FALSE, 
+      booktabs = TRUE, 
+      format = "html",
+      caption = "Type II Analysis of Deviance") %>%
+  kable_styling() %>%
+  cat(., file = file.path(tables_path,paste0(exp, "_deviance_tables_anova_conditions.html")))
+
+```
+
+#### Marginal mean contrasts
+```{r t-wrangle-post-hoc-tables2, echo=FALSE}
+contrasts2 <- do.call(rbind, lapply(all.models2, '[[', 'contrasts')) %>%
+   mutate(across(is.numeric, round, 2)) %>%
+   mutate(modulation = str_split(row.names(.),"[.]",simplify = T)[,1], .before=1) %>%
+   remove_rownames() %>%
+   dplyr::select(-c("df", "null")) %>% 
+   dplyr::rename(IRR = ratio)
+
+contrasts2
+```
+
+```{r t-save-post-hoc-tables2, include=FALSE}
+# marginal means
+contrasts2 %>%
+    kbl(escape = FALSE, 
+      booktabs = TRUE, 
+      format = "html",
+      caption = "Estimated Marginal Means") %>%
+  kable_styling() %>%
+  #kable_paper() %>%
+  cat(., file = file.path(tables_path,paste0(exp, "_mm_contrasts_conditions.html"))) 
+```
+
+#### Incidence Rate Ratios (IRR)
+
+```{r combined-IRRs2}
+# IRR
+IRRs2 <- do.call(rbind, lapply(all.models2, '[[', 'IRR')) %>%
+   mutate(across(is.numeric, round, 2)) %>%
+   mutate(condition = str_split(row.names(.),"[.]",simplify = T)[,1], .before=1) %>%
+   mutate(coef = str_remove(str_split(row.names(.),"[.]",simplify = T)[,2],"condition"), .after=1) %>%
+   remove_rownames()
+IRRs2
+```
+
+```{r t-IRRs2, include=FALSE}
+IRRkbl2 <- IRRs2 %>%
+    kbl(escape = FALSE, 
+      booktabs = TRUE, 
+      format = "html",
+      caption = "IRR") %>%
+  kable_styling() 
+
+IRRkbl2 %>%
+  cat(., file = file.path(results_path,paste0("/tables/",exp,"_IRRs_conditions.html"))) 
+
+```
+
+```{r p-model-estimates2, include=FALSE}
+lapply(seq_along(all.models2), function(x) {
+       p <- all.models2[[x]]$plot 
+       ggsave(file.path(sm_path,paste0(exp, '_IRR_', names(all.models2[x]),'.png') ), p, width = 5, height = 3)}) 
+
+```
+
+
+
+### Anticipating the trough or the peak?
+
+Use bootstrapped means from the whole data set, we now want to see whether average
+call onsets were "aimed" more at dodging AM peaks or more targeted at AM troughs.
+
+To find out, we first compute two measures of call onset timing as follows:
+```{r time-lag, include=FALSE}
+# !! NB !! chunk depends on chunk `calculate-boot-parameters` - needs `mu_bs_df`
+
+# bootstrapped means
+mu_bs_time <- mu_bs_df %>%
+  mutate(f = as.numeric(str_remove(modulation,"Hz")),
+         theta_t = round((mu/(2*pi)) * round(1/f,4),4),
+         t_from_peak = theta_t - round((1/f)/2,4), # is 0 if on it, is > 0 if after, is < 0 if before
+         t_to_trough = round((1/f),3) - theta_t, # relative to trough-to-trough phase, time to next trough
+         t_from_trough = theta_t
+         )
+
+mu_bs_time
+
+# timings by condition
+basic_timings <- mu_bs_time %>% group_by(condition) %>% summarise(median_peak = median(t_from_peak), 
+                                                             iqr_peak = IQR(t_from_peak),
+                                                             mad_peak = mad(t_from_peak),
+                                                             median_trough = median(t_to_trough),
+                                                             mad_trough = mad(t_to_trough),
+                                                             iqr_trough = IQR(t_to_trough))
+basic_timings
+```
+
+Plot timings relative to both acoustic features. Show raw data (dots), distributions, 
+and boxplots.
+
+```{r plot-time-lag, include=FALSE, out.width = "50%"}
+comp.plot <- p.composite_peak_trough(mu_bs_time)
+comp.plot
+
+curve_plots <- p.curves(mu_bs_time)
+
+ggsave(file.path(figures_path,paste0(exp, '_fig3a.png')), comp.plot, width = w2+2, height = h-2)
+ggsave(file.path(figures_path,paste0(exp, '_fig3acurve.png')), curve_plots[[1]], width = (w2+2/2), height = h-2)
+
+  
+```
+
+
+```{r timing-breakdown}
+# timings by condition and modulation
+more_timings <- mu_bs_time %>% group_by(modulation, condition) %>% 
+  summarise(median_peak = median(t_from_peak), 
+           iqr_peak = IQR(t_from_peak),
+           mad_peak = mad(t_from_peak),
+           median_trough = median(t_to_trough),
+           mad_trough = mad(t_to_trough),
+           iqr_trough = IQR(t_to_trough))
+
+more_timings
+
+```
+
+
+```{r p-time-lag, out.width="50%"}
+pb <- p.peak_trough(mu_bs_time %>% 
+                      dplyr::filter(!condition=="silence", !condition=="half-band masker"), binwidth = 8) %>%
+  recolor()
+
+print(pb)
+
+ggsave(file.path(figures_path,paste0(exp, '_fig3a-alt1.png')), pb, width = 6, height = 4)
+
+```
+
+### Random Forest models
+
+Run three versions of the random forest model:
+
+1. A "full" model: $modulation ~ t_{peak} + t_{trough}$
+
+2. A "peaks" model: $modulation ~ t_{peak}$
+
+3. A "troughs" model: $modulation ~ t_{trough}$
+
+```{r random-forest}
+mu_rf <- mu_bs_time %>% dplyr::filter(!condition=="silence") %>%
+  dplyr::select(t_to_trough, t_from_peak, modulation)
+
+test_idx <- sample(1:nrow(mu_rf), size = floor(nrow(mu_rf)*0.60))
+
+# split into 0.6:0.4 train/validation set
+mu_bs_train <- mu_rf[test_idx,] 
+mu_bs_valid <- mu_rf[-test_idx,] 
+
+# shuffled
+mu_bs_shuffled_pk <- mu_bs_train
+
+rf_files <- c(file.path(models_path, paste0(exp,"_RF_full.RDS")),
+              file.path(models_path, paste0(exp,"_RF_troughs_only.RDS")),
+              file.path(models_path, paste0(exp,"_RF_peaks_only.RDS")))
+
+
+
+if (all(file.exists(rf_files))) {
+  rf_models <- lapply(rf_files, FUN = readr::read_rds)
+  rf_classifier <- rf_models[[1]]
+  rf_classifier_tr <- rf_models[[2]]
+  rf_classifier_pk <- rf_models[[3]]
+} else {
+
+  # train
+  # full model
+  rf_classifier <- randomForest(modulation ~ ., data=mu_bs_train, ntree=500, mtry=2, importance=TRUE, proximity=TRUE)
+  readr::write_rds(rf_classifier, file = rf_files[1])
+  
+  # only troughs
+  rf_classifier_tr <- randomForest(modulation ~ t_to_trough, data=mu_bs_train, ntree=500, mtry=1, proximity=TRUE)
+  readr::write_rds(rf_classifier_tr, file = rf_files[2])
+  
+  # only peaks
+  rf_classifier_pk <- randomForest(modulation ~ t_from_peak, data=mu_bs_train, ntree=500, mtry=1, proximity=TRUE)
+  readr::write_rds(rf_classifier_pk, file = rf_files[3])
+  
+  rf_models <- list(rf_classifier, rf_classifier_tr, rf_classifier_pk)
+
+
+}
+rf_classifier
+rf_classifier_tr
+rf_classifier_pk
+
+```
+
+Calculate variable importance of two predictors from the full model...
+```{r imporance, include=FALSE}
+importance <- importance(rf_classifier) %>% importance_to_df()
+
+```
+
+Predict modulation classes for the validation set for each of the models...
+```{r validate-full}
+predictions <- predict(rf_classifier,mu_bs_valid[,-3])
+predictionstr <- predict(rf_classifier_tr,mu_bs_valid[,-3])
+predictionspk <- predict(rf_classifier_pk,mu_bs_valid[,-3])
+
+# predicted classes vs. observed classes
+table(observed=mu_bs_valid[,3],predicted=predictions)
+
+
+print("Full model:")
+# proportion misclassifications
+mean(predictions != mu_bs_valid$modulation) * 100
+# stats
+(matfull <- caret::confusionMatrix(predictions, mu_bs_valid$modulation))
+
+print("Troughs model:")
+# stats
+(mattr <- caret::confusionMatrix(predictionstr, mu_bs_valid$modulation))
+
+print("Peaks model:")
+# stats
+(matpk <- caret::confusionMatrix(predictionspk, mu_bs_valid$modulation))
+
+validation <- list(matfull, mattr, matpk)
+```
+
+```{r MDS-plot, eval=FALSE, include=FALSE}
+# MDSplot(rf_classifier, mu_bs_train$modulation) # takes an awfully long time...
+```
+
+
+#### Plot confusion matrices from training models
+```{r p-plot-confusion-matrices, out.width="50%"}
+# training matrices
+# confmats <- lapply(rf_models,function(x) cormat_to_df(x$confusion[,-3])) %>%
+#   setNames(c("full","troughs","peaks")) %>%
+#   map_df(., ~as.data.frame(.x), .id="model") %>%
+#   mutate(model = factor(model, levels = c("troughs","peaks","full")))
+
+# validation matrices
+confmats <- lapply(validation, function(x) cormat_to_df(x$table %>% as.data.frame()) ) %>%
+  setNames(c("full", "troughs", "peaks")) %>%
+  map_df(., ~as.data.frame(.x), .id="model") %>%
+  mutate(model = factor(model, levels = c("troughs", "peaks", "full")))
+
+
+confmat <- p.mat(confmats, ulim = max((mu_bs_valid%>%group_by(modulation)%>%summarise(n=n()))[,2])) +
+  facet_grid(cols=vars(model)) 
+  print(confmat)
+  
+  ggsave(file.path(figures_path,paste0(exp, '_fig3b.png')), 
+         confmat, width = h, height = w2) 
+
+```
+
+
+#### Shuffled Forests
+Now, let's see what happens if we shuffle the modulation class labelled for one 
+or the other measure in our full model. The drop in performance, respectively, should
+give us some insight into which variable is doing more of the legwork.
+
+```{r random-forest-shuffled}
+# shuffled
+mu_bs_shuffled_pk <- mu_bs_train
+mu_bs_shuffled_pk$t_from_peak <- mu_bs_shuffled_pk$t_from_peak[sample(1:nrow(mu_bs_shuffled_pk))]
+
+mu_bs_shuffled_tr <- mu_bs_train
+mu_bs_shuffled_tr$t_to_trough <- mu_bs_shuffled_tr$t_to_trough[sample(1:nrow(mu_bs_shuffled_tr))]
+
+# train
+# full model
+shPeak_rf_classifier <- randomForest(modulation ~ ., data=mu_bs_shuffled_pk, ntree=500, mtry=2, importance=TRUE, proximity=TRUE)
+shPeak_rf_classifier
+
+shTrough_rf_classifier <- randomForest(modulation ~ ., data=mu_bs_shuffled_tr, ntree=500, mtry=2, importance=TRUE, proximity=TRUE)
+shTrough_rf_classifier
+
+
+```
+
+Let's get predictions as before...
+```{r validate-shuffled}
+predictionstr_sh <- predict(shTrough_rf_classifier,mu_bs_valid[,-3])
+predictionspk_sh <- predict(shPeak_rf_classifier,mu_bs_valid[,-3])
+
+print("Shuffled troughs:")
+# stats
+shtr <- caret::confusionMatrix(predictionstr_sh , mu_bs_valid$modulation)
+shtr
+print("Shuffled peaks:")
+# stats
+shpk <- caret::confusionMatrix(predictionspk_sh , mu_bs_valid$modulation)
+shpk
+
+
+validation_sh <- list(shtr, shpk)
+```
+
+How did variable importance metrics compare between the full (unshuffled) version
+and the two shuffled versions?
+```{r shuffled-importance, out.width="50%"}
+importance_sh <- importance(shTrough_rf_classifier)  %>% importance_to_df()
+importance_shpk <- importance(shPeak_rf_classifier) %>% importance_to_df()
+compare <- rbind(importance_shpk %>% mutate(shuffle = "shuffled peaks"),
+                  importance_sh %>% mutate(shuffle = "shuffled troughs"), 
+                  importance %>% mutate(shuffle = "original"))
+
+p.imp.sh <- p.importance_shuffled(compare)
+p.imp.sh
+
+ggsave(file.path(figures_path,paste0(exp, '_fig3c.png')),p.imp.sh, width = 4, height = 4)
+```
+
+#### Plot shuffled confusion matrices from training models
+Finally, here's how our shuffled modelled fared at classifying modulation rate classes...
+```{r sp-plot-shuffled-confusion-matrices, echo=supplementary, out.width = "50%"}
+# validation matrices
+confmats_sh <- lapply(validation_sh, function(x) cormat_to_df(x$table %>% as.data.frame()) ) %>%
+  setNames(c("troughs", "peaks")) %>%
+  map_df(., ~as.data.frame(.x), .id="model") %>%
+  mutate(model = factor(model, levels = c("troughs", "peaks", "full")))
+
+
+confmat_sh <- p.mat(confmats_sh, ulim = max(confmats_sh$n)) + 
+  facet_grid(cols=vars(model)) 
+
+  print(confmat_sh)
+  
+  ggsave(file.path(figures_path,paste0(exp, '_figs6.png')), 
+         confmat_sh, width = h, height = w3)
+
+  
+
+```
+
+```{r auc, include=FALSE}
+# Validation set assessment #2: ROC curves and AUC
+
+# Needs to import ROCR package for ROC curve plotting:
+library(ROCR)
+
+# Calculate the probability of new observations belonging to each class
+# prediction_for_roc_curve will be a matrix with dimensions data_set_size x number_of_classes
+prediction_for_roc_curve <- predict(shPeak_rf_classifier,mu_bs_valid[,-3],type="prob")
+
+# Use pretty colours:
+pretty_colours <- RColorBrewer::brewer.pal(n=8,name="Spectral")
+# Specify the different classes 
+classes <- levels(mu_bs_valid$modulation)
+# For each class
+for (i in 1:length(levels(mu_bs_valid$modulation))) {
+ # Define which observations belong to class[i]
+ true_values <- ifelse(mu_bs_valid[,3]==classes[i],1,0)
+ # Assess the performance of classifier for class[i]
+ pred <- prediction(prediction_for_roc_curve[,i],true_values)
+ perf <- performance(pred, "tpr", "fpr")
+ if (i==1)
+ {
+     plot(perf,main="ROC Curve",col=pretty_colours[i]) 
+ }
+ else
+ {
+     plot(perf,main="ROC Curve",col=pretty_colours[i],add=TRUE) 
+ }
+ # Calculate the AUC and print it to screen
+ auc.perf <- performance(pred, measure = "auc")
+ print(auc.perf@y.values)
+}
+```
+
+
+#### Quantify overlapping calls
+
+```{r call-overlap}
+overlap_calls <- data[which(data$onset_interval<data$duration),]%>% 
+  mutate(overlap = duration-onset_interval)
+
+cat("Of a total of", nrow(data), "calls,", nrow(overlap_calls),
+    "(", round(nrow(overlap_calls)/nrow(data)*100,2), "%) overlapped in time.")
+
+n_overlap <- overlap_calls %>% group_by(modulation, condition) %>% summarise(n = n())
+
+(n_overlap_conttable <- addmargins(table(overlap_calls$modulation,overlap_calls$condition), c(1,2)))
+```
+
+#### Modelling call overlap incidence
+Let's run the overlap data through a negative binomial...
+```{r call-overlap-models, include=FALSE}
+n_overlap <- overlap_calls %>% group_by(modulation, condition, group, as.factor(session)) %>% 
+  summarise(n = n())
+
+ovlp.models <- lapply(sort(unique(n_overlap$modulation)), function(x) {
+                      print(x)
+                      md <- run_negbinom_model(n_overlap %>% filter(modulation==x)) } )
+```
+
+Deviance tables...
+```{r call-overlap-anovas}
+(ovlp.anova <- do.call(rbind, lapply(ovlp.models, '[[', 'deviance')) %>% 
+   mutate(across(is.numeric, round, 2)))
+```
+
+And contrasts...
+```{r call-overlap-contrasts}
+(contrasts <- do.call(rbind, lapply(ovlp.models, '[[', 'contrasts')) %>%
+   mutate(across(is.numeric, round, 2)) %>%
+   mutate(modulation = factor(rep(unique(n_overlap$modulation),each=length(unique(n_overlap$condition)))),.before=1) %>%
+   remove_rownames() %>%
+   dplyr::select(-c("df", "null")) %>%
+   dplyr::rename(IRR = ratio))
+```
+```{r t-call-overlap-contrasts, include=FALSE}
+# marginal means
+contrasts %>%
+    kbl(escape = FALSE, 
+      booktabs = TRUE, 
+      format = "html",
+      caption = "Estimated Marginal Means") %>%
+  kable_styling() %>%
+  cat(., file = file.path(tables_path,paste0(exp, "_overlap_contrasts.html"))) 
+```
+
+And finally, predict values...
+```{r call-overlap-predictions}
+ovlp_preds <- do.call(rbind, lapply(ovlp.models, '[[', 'predictions')) %>%
+   mutate(across(is.numeric, round, 2)) %>%
+   mutate(modulation = factor(rep(unique(n_overlap$modulation),each=length(unique(n_overlap$condition))))) %>%
+   remove_rownames()
+
+ovlp_pred <- p.n_pred(ovlp_preds) %>% recolor()
+
+ovlp_pred
+
+ggsave(file.path(figures_path,paste0(exp, '_figs7b.png') ), ovlp_pred, width = 5, height = 4)
+
+```
+
+Finally, we can calculate circular stats for overlapping calls, and visualize the
+angular vectors representing those distributions for each condition:
+```{r sp-degree-overlap, echo=supplementary, out.width = "50%"}
+overlap_circsummary <- overlap_calls %>%
+    group_by(modulation, condition) %>%
+    summarize(n = n(),
+           theta_bar = mean.circular(start_phase_circ, na.rm = T),
+           r_bar = rho.circular(start_phase_circ, na.rm = T),
+           vm = var.circular(start_phase_circ), 
+           rt = rayleigh.test(start_phase_circ, mu=circular(0))$statistic,
+           p = rayleigh.test(start_phase_circ, mu=circular(0))$p.value,
+           bs_mu_ci_l = mle.vonmises.bootstrap.ci(start_phase_circ, alpha=.05)$mu.ci[1], 
+           bs_mu_ci_h = mle.vonmises.bootstrap.ci(start_phase_circ, alpha=.05)$mu.ci[2],) %>%
+    mutate(p_adjust = p.adjust(p, method ="bonferroni"), .after = "p") %>%
+    mutate(across(where(is.numeric), round, 3)) 
+
+overlap_circsummary %>%
+  kbl(escape = FALSE, 
+      booktabs = TRUE, 
+      format = "html",
+      caption = "Circular statistics for overlapping calls") %>%
+  kable_styling() %>%
+  cat(., file = file.path(tables_path,paste0(exp, "_circ_stats_overlap.html")))
+
+p.ang <- p.angular_vectors(overlap_circsummary %>% confint_wrap())
+
+p.ang
+ ggsave(file.path(figures_path,paste0(exp, '_figs7a.png') ), p.ang, width = w, height = 4)
+ 
+```
+
+```{r sp-hist-overlap, eval=FALSE, include=FALSE, out.width="50%"}
+# overlap histograms
+p.ovlp <- ggplot(overlap_calls) +
+  geom_rect(data = overlap_calls %>% group_by(modulation, condition) %>%
+            summarise(quant75 = quantile(overlap,probs = seq(0,1,0.25))[4]),
+            inherit.aes = F,
+            aes(xmin = 0, xmax = quant75, ymin=0, ymax=Inf, fill = condition), alpha = 0.1)+
+  geom_histogram(aes(overlap, color = condition, fill=condition), 
+                 position = "identity", alpha=0.6) +
+  scale_x_continuous(name = "overlap (ms)", 
+                     limits = c(0,0.01), labels = 1000*seq(0,0.1,length.out=5)) +
+  scale_color_manual(values=c_pal, name=NULL) +
+  scale_fill_manual(values=c_pal, name=NULL) +
+  facet_grid(cols=vars(modulation), scales="free") +
+  guides(color=FALSE, fill=FALSE,alpha=FALSE) +
+  theme_jamlight()
+p.ovlp
+
+ ggsave(file.path(figures_path,paste0(exp, '_figs7a-al1.png') ), p.ovlp, width = w+2, height =4)
+```
+
+```{r p-call-overlap,  echo=supplementary, out.width = "50%"}
+po <- p.circ_density(dat=overlap_calls, circ_dat=overlap_circsummary %>% confint_wrap(), bins = 30) %>% recolor(which = "f")
+  print(po)
+  ggsave(file.path(figures_path,paste0(exp, '_figs7a-alt2.png') ), po, width = w, height = 5)
+  
+
+```
+
+
+
+### Investigate the onset of this adaptation ability
+To determine how many cycles of continuous stimulation are needed for the bats's
+timing adaptation to stabilize, estimate mean and concentration parameters for successively
+larger cycle windows:
+
+```{r calc-speed}
+max_n <- data_init %>% group_by(modulation, condition) %>% summarise(n = max(start_cycle)) %>% 
+  ungroup() %>% summarise(min = min(n))
+
+by_cycle_summary <- data.frame()
+for (c in seq(0, max_n$min, 10)) {
+#for (c in 2:length(seq(0, max_n, 10))) {
+  #s <- seq(0, 1000, 10)
+  dat_summary <- data_init %>% 
+    dplyr::filter(start_cycle <= c) %>%
+    #dplyr::filter(start_cycle > s[c-1] & start_cycle <= s[c]) %>% # non-cumulative
+    group_by(modulation, condition) %>% # pool over groups
+    summarize(n = c,
+           theta_bar = mean.circular(start_phase_circ, na.rm = T) %>% as.numeric(),
+           r_bar = rho.circular(start_phase_circ, na.rm = T))
+  by_cycle_summary <- rbind(by_cycle_summary, dat_summary)
+}
+```
+
+
+```{r 3d-plots-render, eval=FALSE, include=FALSE}
+# Show interactive plots for angular means over each cumulative 5-cycles:
+pltypal <- RColorBrewer::brewer.pal(n=8,name="Spectral")
+  if (exp == "exp_1") {
+  pltypal <- c("#F46D43","#FFA054")
+  }
+pltypal <- setNames(pltypal, unique(by_cycle_summary$modulation))
+
+plts <- list()
+for (cond in unique(by_cycle_summary$condition)) {
+  pltdat <- by_cycle_summary[by_cycle_summary$condition==cond,] %>%
+      mutate(text = paste0("cycles cum.: ", n, "\n", 
+                           "mu: ", theta_bar, "\n",
+                           "kappa: ", r_bar))
+
+  
+  
+  plt <- plot_ly(data =pltdat,
+                x= ~n, y=~theta_bar, z=~r_bar, 
+                type="scatter3d", mode="markers", 
+                color=~modulation,
+                colors=pltypal,
+                size = 2) %>%
+        layout(title = cond,
+               scene = list(xaxis = list(title = 'elapsed cycles', autorange = "reversed"),
+               yaxis = list(title = 'mu', tickvals = seq(0, 2*pi, length.out = 5),
+                            ticktext = c("0","pi/2","pi","3pi/2","2pi")),
+               zaxis = list(title = 'kappa')))
+  
+  plts <- append(plts,list(plt))
+  
+  print(plt)
+  htmlwidgets::saveWidget(plt, file=file.path(figures_path,paste0(exp, '_cycle_traj_',cond,'_1600.html')))
+  # this saves a widget as an html
+  #rmarkdown::pandoc_convert("C:/Users/Ava Kiai/OneDrive - Johann Wolfgang Goethe Universität/#Bat Lab/_Projects/colony_jam/Experiment_2/4-figures_tables/figures/exp_2_cycle_traj_random masker.html", output = 'C:/Users/Ava Kiai/OneDrive - Johann Wolfgang Goethe Universität/#Bat Lab/_Projects/colony_jam/Experiment_2/4-figures_tables/figures/output.pdf')
+#pdflatex: major issue: So far, you have not checked for MiKTeX updates.
+}
+```
+
+```{r anim-save, echo=FALSE}
+anim <- ggplot(by_cycle_summary, aes(theta_bar, r_bar, color = modulation)) + 
+  geom_point(size = 4, alpha = 0.6) +
+  scale_x_continuous(name = expression(mu), 
+                     breaks = seq(0, 2*pi, length.out = 5), 
+                     limits = c(0,2*pi),
+                     labels = piplot,
+                     expand = c(0,0)) +
+  scale_y_continuous(name=expression(kappa),
+                     breaks = scales::pretty_breaks(4)) +
+  scale_color_brewer(palette = "Spectral") +
+  facet_grid(rows=vars(condition), scales = "fixed") +
+  guides(alpha = FALSE) +  
+  theme_jamlight() +
+  theme(panel.spacing.y = unit(0.7, "cm")) +
+  labs(title = 'Elapsed cycles: {frame_time}') +
+  transition_time(n) +
+  ease_aes('linear') +
+  exit_manual() +
+  shadow_wake(wake_length = 0.1)
+
+anim <- anim %>% recolor(which="c")
+gganimate::anim_save(file.path(figures_path,paste0(exp, '_cycles.gif')), animation = anim)
+
+animate(anim, end_pause = 15)
+
+
+```
+
+
+
+
+
+
+### References
+Some references for circular stats can be found from the 
+[NCSS website](https://ncss-wpengine.netdna-ssl.com/wp-content/themes/ncss/pdf/Procedures/NCSS/Circular_Data_Analysis.pdf), as well as the documentation for the [Matlab](https://www.jstatsoft.org/article/view/v031i10) library for 
+circular stats, and articles written on [Bayesian modelling of circular data](https://journals.sagepub.com/doi/pdf/10.1177/1471082X10000301). 
+
+There is also the textbook, [*Statistical analysis of circular data*](https://books.google.de/books?id=wGPj3EoFdJwC&printsec=frontcover#v=onepage&q&f=false), as well as:
+- Batschelet, E. (1981). *Circular Statistics in Biology.* Academic Press: London.
+- Jammalamadaka, S.R. & Sengupta, A. (2001). *Topics in Circular Statistics.* World Scientific, River Edge, N.J.
+
