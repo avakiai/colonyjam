@@ -1,4 +1,4 @@
-
+# paths are rel to .Rmd file!
 render_analysis <- function(exp = "exp_1", 
                             plot_sm = TRUE, 
                             use_all = TRUE, 
@@ -7,7 +7,9 @@ render_analysis <- function(exp = "exp_1",
                             seed = 42) {
   rmarkdown::render(
     './R/2-analysis/master_analysis.Rmd',
-    output_file = paste0('./../../vignettes/master-analyses', '_', gsub("_","-",exp), '_', gsub(" ","_",gsub(":","-", Sys.time())), '.html'),
+    output_file = paste0('./../../vignettes/master-analyses', '_', 
+                         gsub("_","-",exp), '_', 
+                         gsub(" ","_",gsub(":","-", Sys.time())), '.html'),
     params = list(data_path = data_path, 
                   results_path = results_path,
                   exp = exp, 

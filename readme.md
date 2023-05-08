@@ -8,7 +8,7 @@ This R project implements the analyses for the paper "Flexible control of vocal 
 
 The analyses require a recent version of R, RStudio, and the following packages, which can be downloaded by running the following command:
 ```
-packages <- c("circular", "CircStats", "CircSpaceTime", "sjPlot", "yarrr", "janitor", "broom", "knitr",  "kableExtra", "car", "MASS", "emmeans", "rcompanion", "pscl", "randomForest", "chisq.posthoc.test", "viridis", "scales","ggh4x","ggside", "ggdist", "ggridges","gganimate","plotly","htmlwidgets","tidyverse","piggyback")
+packages <- c("circular", "CircStats", "CircSpaceTime", "sjPlot", "yarrr", "janitor", "broom", "knitr",  "kableExtra", "car", "MASS", "emmeans", "rcompanion", "pscl", "caret", "MLeval", "viridis", "scales","ggh4x","ggside", "ggdist", "ggridges","tidyverse","piggyback")
 
 # Install packages not yet installed
 installed_packages <- packages %in% rownames(installed.packages())
@@ -37,7 +37,6 @@ Cached data and models are provided to speed up analysis (~ 2 mins vs. ~ 2 hours
 	+ `/2-analysis` contains the main .Rmd file containing all analyses and visualizations used in the paper and supplementary materials
 	+ `/3-results` results are saved to one of the following subfolders:
 		+ `/figures`
-		+ `/models`
 		+ `/supplementary_figures`
 		+ `/tables`
 - `src` contains files for downloading data and compiling the analysis report
