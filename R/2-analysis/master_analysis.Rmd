@@ -87,7 +87,7 @@ options(scipen=999,
 if (exp=="exp_1") {c_pal <- c("#0F6273","#D66502","#F5C951") # playback conditions
                    pal <- c("#F46D43","#FFA054") # modulation rates
                    w <- 3
-                   w2 <- 3
+                   w2 <- 5
                    w3 <- 3
                    h <- 4
                    h2 <- 5}
@@ -955,7 +955,7 @@ basic_timings
 Plot timings relative to both acoustic features. Show raw data (dots), distributions, 
 and boxplots.
 
-```{r plot-time-lag, out.width=50%}
+```{r plot-time-lag, out.width="50%"}
 comp.plot <- p.composite_peak_trough(mu_bs_time)
 
 print(comp.plot)
@@ -1096,9 +1096,9 @@ pr
 
   ggsave(file.path(figures_path,paste0(exp, '_fig4e.png')), 
          pr, width = 5, height = 4)
-  ggsave(file.path(figures_path,paste0(exp, '_fig4e.pdf')), 
-         pr, width = 5, height = 4)
+
 ```
+
 ```{r lda-plots}
 
 confmats <- lapply(lda_validation, function(x) 
@@ -1116,8 +1116,7 @@ confmat <- p.mat(confmats, ulim = max((mu_bs_valid%>%group_by(modulation)%>%summ
   
   ggsave(file.path(figures_path,paste0(exp, '_fig4b.png')), 
          confmat, width = w2, height = h) 
-  ggsave(file.path(figures_path,paste0(exp, '_fig4b.pdf')), 
-         confmat, width = w2, height = h)
+
   
   
 ```
