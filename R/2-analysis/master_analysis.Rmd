@@ -24,17 +24,8 @@ After extracting call timings from acoustic recordings (.wav files) and identify
 
 ### Setup
 
-```{r knit-options, setup, include=FALSE}
-knitr::opts_chunk$set(warning = FALSE, message = FALSE)
-```
-
-```{r set-working-directory, eval=FALSE, include=FALSE}
-setwd(here::here())
-getwd()
-```
-
 ```{r load-packages, echo=TRUE, message=FALSE, warning=FALSE}
-packages <- c("circular", "CircStats", "CircSpaceTime", "sjPlot", "janitor", "broom", "knitr",  "kableExtra", "car", "MASS", "emmeans", "rcompanion", "pscl", "caret", "MLeval", "viridis", "scales","ggh4x","ggside", "ggdist", "ggridges","tidyverse")
+packages <- c("circular", "CircStats", "CircSpaceTime", "sjPlot", "janitor", "broom", "knitr",  "kableExtra", "car", "MASS", "emmeans", "rcompanion", "pscl", "caret", "MLeval", "viridis", "scales","ggh4x","ggside", "ggdist", "ggridges","tidyverse","here")
 
 # Install packages not yet installed
 installed_packages <- packages %in% rownames(installed.packages())
@@ -44,6 +35,10 @@ if (any(installed_packages == FALSE)) {
 
 # Packages loading
 invisible(lapply(packages, library, character.only = TRUE))
+
+# Set directory to current file location
+setwd(here::here())
+getwd()
 ```
 
 ```{r load-functions, include=FALSE}
@@ -192,12 +187,6 @@ Calculate histogram averages (essentially, a PSTH)
 
 call_summary1 <- get_avg_hist(data_2proc, NULL, list("group","session"), "period", 
                               by_group = TRUE, by_session = TRUE)
-call_summary60 <- get_avg_hist(data_2proc, 60, list("group","session"), "period")
-
-# optionally: check that the two have the correct # of bins
-# call_summary1$generic %>% group_by(modulation) %>% summarise(sort(unique(mids),decreasing = T)[2])
-# call_summary60$generic %>% group_by(modulation) %>% summarise(n=length(unique(mids)))
-
 ```
 
 First, we asked: Did the presence of playback noise affect the distribution of emitted calls within the modulation cycle?
@@ -207,62 +196,34 @@ Here we plot an averaged histogram of detected call onsets
 
 Points are mean # calls, shaded areas are +- sem...
 
+*NB: The code below generates subfigures used in Figs. 2 & 3*
 ```{r p-averaged-histograms, echo=TRUE, out.width = "50%"}
-
 # average call counts all at once, 1 ms bins
 p <- p.hist_avg_dot_kwargs(dat = call_summary1$generic, facets = c("condition","modulation"))
  print(p)
  ggsave(file.path(figures_path,paste0(exp, '_fig2a.png') ), p, width = w, height = 5)
-
-# average call counts with fixed y-axis, to better illustrate the relative calling rate between conditions
-p2 <- p.hist_avg_dot_kwargs_fixedy(dat = call_summary1$generic, facets = c("","modulation")) 
-  print(p2)
- ggsave(file.path(figures_path,paste0(exp, '_fig2a-alt1.png') ), p2, width = w, height = 5)
-
-# average call counts with fixed y-axis, with 60 ms bins for each modulation rate, to show trend on the same x-scale across conditions  
-p3 <- p.hist_avg_dot_kwargs_fixedy(dat = call_summary60$generic, facets = c("","modulation")) 
-  print(p3)
-  ggsave(file.path(figures_path,paste0(exp, '_fig2a-alt2.png') ), p3, width = w, height = 5) 
 ```
 
+*NB: The code below generates subfigures used in Figs. S2 & S4*
 ```{r sp-averaged-histograms, echo=supplementary, eval=supplementary, out.width = "30%"}
 # show average call counts (with and without fixed y axis) for each group, and for each recording day ("session")
 for (m in sort(unique(call_summary1$group$modulation))) {
  p1 <- p.hist_avg_dot_kwargs(dat = call_summary1$group %>% filter(modulation == m), 
                              facets = c("condition","group")) +
                              ggtitle(paste0(m, ": by group"))
- p2 <- p.hist_avg_dot_kwargs_fixedy(dat = call_summary1$group %>% filter(modulation == m), 
-                                    facets = c("","group")) +
-                             ggtitle(paste0(m, ": by group")) 
  p3 <- p.hist_avg_dot_kwargs(dat = call_summary1$session %>% filter(modulation == m),
                              facets = c("condition","session")) +
                              ggtitle(paste0(m, ": by day"))
  
- print(p1); print(p2); print(p3)
+ print(p1); print(p3)
  ggsave(file.path(sm_path,paste0(exp, '_figS2_',m,'.png') ), 
         p1, width = 7, height = 5)
- ggsave(file.path(sm_path,paste0(exp, '_figS2_',m,'-alt1.png') ), 
-        p2, width = 7, height = 5)
  ggsave(file.path(sm_path,paste0(exp, '_figS2_',m,'.png') ), 
         p3, width = 7, height = 5)
 }
 ```
 
-```{r sp-averaged-histograms-initial, echo=supplementary, eval=supplementary, out.width = "50%"}
-# show average hist of binned calls for the first 7.5-8 mins of continuous AM playback for each mod.
-# [not included in paper, but illustrative]
-call_summary1_init <- get_avg_hist(data_init, NULL, list("group"), "period", by_group = TRUE)
-#str(data_init)
- 
-firsts <- p.hist_avg_col(dat = call_summary1_init$group %>% 
-                 dplyr::filter(condition=="full-band masker" | condition=="steady-state masker"), 
-               facets = c("modulation","group"))
 
-print(firsts)
-
-ggsave(file.path(sm_path,paste0(exp, '_figSx.png') ), firsts, width = 7, height = h2)
-
-```
 
 ### Circular Statistics
 To analyze the distribution of call onsets within the modulation cycle, we must
@@ -309,7 +270,7 @@ while that of calls detected in the presence of masking noise will deviate from 
 if (subsample) {
   check_n <- data %>% group_by(condition, modulation) %>% summarise(n = n())
   
-  set.seed(seed) #.Random.seed)
+  set.seed(seed) #.Random.seed if full random desired
   data_samp <- data %>% group_by(condition, modulation) %>% slice_sample(n = min(check_n$n))
   
   print(paste0("Sub-sampled data: N = ", nrow(data_samp), ". Original data: N = ", nrow(data), ". N in each group = ", min(check_n$n)))
@@ -409,6 +370,7 @@ vector.
 circ_summary_plot <- confint_wrap(circ_summary) 
 ```
 
+*NB: The code below generates subfigures used in Figs. 2 & 3*
 ```{r p-circular-density-histograms, out.width = "80%"}
 circ_density <- p.circ_density(dat = data_samp, circ_dat = circ_summary_plot, bins = 30) %>% recolor(which="f")
 
@@ -473,6 +435,7 @@ head(mu_bs_df)
 
 
 #### Plot bs parameters in the polar plane
+*NB: The code below generates subfigures used in Figs. 2 & 3*
 ```{r p-boot-circ, out.width = "50%"}
 circ_params <- p.circ_params(mu_bs_df, compress = T)  %>% recolor()
 
@@ -483,6 +446,7 @@ ggsave(file.path(figures_path,paste0(exp, '_fig2c.png')), circ_params, width = 3
 ```
 
 ##### ... and in the cartesian plane
+*NB: The code below generates subfigures used in Fig. S3*
 ```{r p-boot-sides, out.width = "50%"}
 mu_kappa <- p.mu_kappa(dat = mu_bs_df %>% 
                          group_by(modulation, condition) %>% 
@@ -646,17 +610,19 @@ n_calls_reg
 ```
 
 First we modelled our counts using a Poisson GLM. However, we observed that the 
-data were highly overdispersed. For example, for the 8 Hz context, overdispersion was:
+data were highly overdispersed. 
+For example, for the 8 Hz context, overdispersion was:
 
 ```{r check-poisson}
 # Poisson Regression 
-calls.glm <- glm(n ~  condition, family = poisson, data = n_calls_reg[n_calls_reg$modulation=="8Hz",])
+# calls.glm <- glm(n ~  condition, family = poisson, data = n_calls_reg[n_calls_reg$modulation=="8Hz",])
+
 # model summary
   # summary(calls.glm)
 
 # check for overdispersion
-OD.pr <- sum(residuals(calls.glm, type="pearson")^2)/df.residual(calls.glm)
-print(OD.pr)
+#OD.pr <- sum(residuals(calls.glm, type="pearson")^2)/df.residual(calls.glm)
+#print(OD.pr)
 ```
 
 Therefore, we proceeded with a Negative Binomial GLM, which allows for overdispersion in the count variable.
@@ -676,20 +642,7 @@ $$\widehat{calls_i} = e^{Intercept + \beta_1 Mask_{condition_j = 2}+...}$$
 defines the rate of calling per hour (the sampling time for each condition), given
 an arbitrary combination of modulation rate and masking condition.
 
-We also ran a "big" model that included all interactions, for which coefficients would
-have a more complex meaning but analyses of variance would provide a global picture. 
-
 #### Run all models
-```{r run-nb-model-big}
-big.model <-  run_negbinom_model(n_calls_reg, 
-                                 formula = "n ~ condition * modulation", 
-                                 contformula = "~ modulation | condition ")
-
-# overdispersion
-print(big.model$dispersion)
-```
-
-
 ```{r run-nb-model-ea}
 all.models <- lapply(sort(unique(n_calls_reg$modulation)), function(x) 
                       md <- run_negbinom_model(n_calls_reg %>% filter(modulation==x)) )
@@ -728,10 +681,6 @@ a single ANOVA.
 
 ```
 
-Below, the analysis of variance for the large model with all features:
-```{r nb-anova-big}
-big.model$deviance
-```
 
 #### Incidence Rate Ratios (IRR)
 The IRRs give us the change in the per hour rate [of calling] from baseline to each condition.
@@ -764,12 +713,11 @@ IRRkbl %>%
 
 ```
 
+
 ```{r p-model-estimates, include=FALSE}
 lapply(seq_along(all.models), function(x) {
        p <- all.models[[x]]$plot 
        ggsave(file.path(sm_path,paste0(exp, '_IRR_', names(all.models[x]),'.png') ), p, width = 5, height = 3)})
-
-#big.model$plot
 ```
 
 
@@ -782,14 +730,6 @@ Below are the post-hoc contrasts from estimated marginal means:
    remove_rownames() %>%
    dplyr::select(-c("df", "null")) %>% 
    dplyr::rename(IRR = ratio))
-```
-
-
-```{r t-big-model-post-hoc-table, eval=FALSE, include=FALSE}
-# Contrasts for the big model:
-big.model$contrasts %>%
-   dplyr::select(-c("df", "null")) %>% 
-   dplyr::rename(IRR = ratio)
 ```
 
 
@@ -821,12 +761,44 @@ ggsave(file.path(figures_path,paste0(exp, '_fig2d.png') ), n_pred, width = 5, he
 
 ```
 
-### Changes in call rate between modulation rate contexts
+*NB: The code below generates subfigures used in Figs. 2 & 3*
+```{r}
+#@editor requested: show points
+n_detailed <- data %>% group_by(modulation, condition, session, group) %>% summarise(n = n()) #%>%
+              #group_by(modulation, condition, group) %>% summarise(mean = mean(n))
+p.new <- ggplot(n_detailed, aes(x = condition)) +
+    geom_point(aes(y = n, 
+                   group = modulation,
+                   color = modulation), 
+               alpha = 0.3,
+               position = position_dodge2(width = 0.5, padding = 0.3), 
+               #color = "darkslategray", 
+               size = 3) +
+    geom_pointrange(data = preds, 
+                    aes(y = fit, ymin = fit-se.fit, ymax = fit+se.fit,
+                        group = modulation,
+                        color = modulation),
+                    position = position_dodge(width = 0.5),
+                    size = 0.75
+                    ) +
+    labs(x = NULL, 
+         y = "calling rate per hour") + 
+    scale_alpha_manual(values = seq(0.2,0.8,0.08)) +
+    scale_color_brewer(palette = "Spectral") +
+    scale_fill_brewer(palette = "Spectral") +
+    theme_jamlight() +
+    theme(legend.position = c(0.96,0.6)) 
 
+p.new <- p.new %>% recolor()
+p.new
+ggsave(file.path(figures_path,paste0(exp, '_n_calls_pred_editor.pdf') ), p.new, width = 5, height = 3)
+ggsave(file.path(figures_path,paste0(exp, '_n_calls_pred_editor.png') ), p.new, width = 5, height = 3)
+```
+
+### Changes in call rate between modulation rate contexts
 Now let's see if there were changes in the overall rate of calling between different
 modulation rate contexts for the same playback condition.
 ```{r model-across-conditions}
-
 all.models2 <- lapply(sort(unique(n_calls_reg$condition)), function(x) 
                       md <- run_negbinom_model(n_calls_reg %>% filter(condition==x), 
                                                formula = "n ~  modulation", 
@@ -886,7 +858,6 @@ contrasts2 %>%
 ```
 
 #### Incidence Rate Ratios (IRR)
-
 ```{r combined-IRRs2}
 # IRR
 IRRs2 <- do.call(rbind, lapply(all.models2, '[[', 'IRR')) %>%
@@ -920,7 +891,6 @@ lapply(seq_along(all.models2), function(x) {
 
 
 ### Anticipating the trough or the peak?
-
 Use bootstrapped means from the whole data set, we now want to see whether average
 call onsets were "aimed" more at dodging AM peaks or more targeted at AM troughs.
 
@@ -955,6 +925,7 @@ basic_timings
 Plot timings relative to both acoustic features. Show raw data (dots), distributions, 
 and boxplots.
 
+*NB: The code below generates a subfigures and graphical components used in Fig. 4*
 ```{r plot-time-lag, out.width="50%"}
 comp.plot <- p.composite_peak_trough(mu_bs_time)
 
@@ -964,8 +935,6 @@ curve_plots <- p.curves(mu_bs_time)
 
 ggsave(file.path(figures_path,paste0(exp, '_fig4a.png')), comp.plot, width = w2+2, height = h-2)
 ggsave(file.path(figures_path,paste0(exp, '_fig4a_curve.png')), curve_plots[[1]], width = (w2+2/2), height = h-2)
-
-  
 ```
 
 
@@ -980,9 +949,7 @@ more_timings <- mu_bs_time %>% group_by(modulation, condition) %>%
            iqr_trough = IQR(t_to_trough)*1000) %>%
   mutate(across(where(is.numeric),round,1))
 
-
 more_timings
-
 ```
 
 
@@ -1079,7 +1046,7 @@ difValues <- diff(results)
 summary(difValues)
 ```
 
-
+*NB: The code below generates subfigures used in Fig. 4*
 ```{r lda-auc}
 res <- evalm(list(full_lda, trough_lda, peak_lda),gnames=c('full','trough','peak'), rlinethick = 0.8)
 
@@ -1099,6 +1066,7 @@ pr
 
 ```
 
+*NB: The code below generates subfigures used in Fig. 4*
 ```{r lda-plots}
 
 confmats <- lapply(lda_validation, function(x) 
@@ -1116,8 +1084,6 @@ confmat <- p.mat(confmats, ulim = max((mu_bs_valid%>%group_by(modulation)%>%summ
   
   ggsave(file.path(figures_path,paste0(exp, '_fig4b.png')), 
          confmat, width = w2, height = h) 
-
-  
   
 ```
 
@@ -1125,7 +1091,6 @@ confmat <- p.mat(confmats, ulim = max((mu_bs_valid%>%group_by(modulation)%>%summ
 
 
 ### Quantify overlapping calls
-
 ```{r call-overlap}
 overlap_calls <- data[which(data$onset_interval<data$duration),]%>% 
   mutate(overlap = duration-onset_interval)
@@ -1164,6 +1129,7 @@ And contrasts...
    dplyr::select(-c("df", "null")) %>%
    dplyr::rename(IRR = ratio))
 ```
+
 ```{r t-call-overlap-contrasts, include=FALSE}
 # marginal means
 contrasts %>%
@@ -1190,8 +1156,42 @@ ggsave(file.path(figures_path,paste0(exp, '_figS5b.png') ), ovlp_pred, width = 5
 
 ```
 
+*NB: The code below generates subfigures used in Fig. S5*
+```{r}
+#@editor requested: show points
+n_overlap_detailed <- overlap_calls %>% group_by(modulation, condition, group, session) %>% summarise(n = n())
+p.new <- ggplot(n_overlap_detailed, aes(x = condition)) +
+    geom_point(aes(y = n, 
+                   group = modulation,
+                   color = modulation), 
+               alpha = 0.3,
+               position = position_dodge2(width = 0.4, padding = 0.3), 
+               #color = "darkslategray", 
+               size = 3) +
+    geom_pointrange(data = ovlp_preds, 
+                    aes(y = fit, ymin = fit-se.fit, ymax = fit+se.fit,
+                        group = modulation,
+                        color = modulation),
+                    position = position_dodge(width = 0.4),
+                    size = 0.75
+                    ) +
+    labs(x = NULL, 
+         y = "calling rate per hour") + 
+    scale_alpha_manual(values = seq(0.2,0.8,0.08)) +
+    scale_color_brewer(palette = "Spectral") +
+    scale_fill_brewer(palette = "Spectral") +
+    theme_jamlight() +
+    theme(legend.position = c(0.96,0.6)) 
+
+p.new <- p.new %>% recolor()
+p.new
+ggsave(file.path(figures_path,paste0(exp, '_overlap_pred_editor.pdf') ), p.new, width = 5, height = 4)
+ggsave(file.path(figures_path,paste0(exp, '_overlap_pred_editor.png') ), p.new, width = 5, height = 4)
+```
+
 Finally, we can calculate circular stats for overlapping calls, and visualize the
 angular vectors representing those distributions for each condition:
+*NB: The code below generates subfigures used in Fig. S5*
 ```{r sp-degree-overlap, echo=supplementary, out.width = "50%"}
 overlap_circsummary <- overlap_calls %>%
     group_by(modulation, condition) %>%
@@ -1221,34 +1221,6 @@ p.ang
  
 ```
 
-```{r sp-hist-overlap, eval=FALSE, include=FALSE, out.width="50%"}
-# overlap histograms
-p.ovlp <- ggplot(overlap_calls) +
-  geom_rect(data = overlap_calls %>% group_by(modulation, condition) %>%
-            summarise(quant75 = quantile(overlap,probs = seq(0,1,0.25))[4]),
-            inherit.aes = F,
-            aes(xmin = 0, xmax = quant75, ymin=0, ymax=Inf, fill = condition), alpha = 0.1)+
-  geom_histogram(aes(overlap, color = condition, fill=condition), 
-                 position = "identity", alpha=0.6) +
-  scale_x_continuous(name = "overlap (ms)", 
-                     limits = c(0,0.01), labels = 1000*seq(0,0.1,length.out=5)) +
-  scale_color_manual(values=c_pal, name=NULL) +
-  scale_fill_manual(values=c_pal, name=NULL) +
-  facet_grid(cols=vars(modulation), scales="free") +
-  guides(color=FALSE, fill=FALSE,alpha=FALSE) +
-  theme_jamlight()
-p.ovlp
-
- ggsave(file.path(figures_path,paste0(exp, '_figS5a-alt1.png') ), p.ovlp, width = w+2, height =4)
-```
-
-```{r p-call-overlap,  echo=supplementary, out.width = "50%"}
-po <- p.circ_density(dat=overlap_calls, circ_dat=overlap_circsummary %>% confint_wrap(), bins = 30) %>% recolor(which = "f")
-  print(po)
-  ggsave(file.path(figures_path,paste0(exp, '_figS5a-alt2.png') ), po, width = w, height = 5)
-  
-
-```
 
 ### References
 Some references for circular stats can be found in the following books: 
